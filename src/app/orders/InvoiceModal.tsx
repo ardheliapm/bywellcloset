@@ -81,10 +81,10 @@ ${itemsText}------------------------------
 *Total Pembayaran: ${formatRupiah(order.totalAmount)}*
 
 *Pembayaran dapat ditransfer melalui:*
-🏦 *BCA*: 1234-567-890
-a/n Bywell Closet
-🏦 *Mandiri*: 9876-543-210
-a/n Bywell Closet
+🏦 *Bank Jago*: 1057 0424 9859
+a/n Ardhe Lia Putri Maharani
+💜 *ShopeePay*: 081230543855
+a/n Ardhe Lia Putri Maharani
 
 Mohon kirimkan foto/bukti transfer setelah pembayaran ya Kak.
 Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`
@@ -290,8 +290,8 @@ Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`
             <p className="font-bold flex items-center gap-1.5">
               <Building className="w-4 h-4 text-emerald-700" /> Informasi Rekening Pembayaran:
             </p>
-            <p>• <strong>BCA:</strong> 1234-567-890 a/n Bywell Closet</p>
-            <p>• <strong>Mandiri:</strong> 9876-543-210 a/n Bywell Closet</p>
+            <p>• <strong>Bank Jago:</strong> 1057 0424 9859 a/n Ardhe Lia Putri Maharani</p>
+            <p>• <strong>ShopeePay:</strong> 081230543855 a/n Ardhe Lia Putri Maharani</p>
             <p className="text-emerald-700 pt-1">
               *Harap sertakan nomor order <strong>#{order.orderNumber}</strong> saat transfer atau konfirmasi bukti pembayaran.
             </p>
