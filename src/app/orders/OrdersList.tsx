@@ -16,10 +16,12 @@ import {
   CreditCard,
   Package,
   X,
-  Trash2
+  Trash2,
+  Plus
 } from 'lucide-react';
 import Link from 'next/link';
 import InvoiceModal, { OrderDetail } from './InvoiceModal';
+import AddItemsModal from './AddItemsModal';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
 
 interface OrdersListProps {
@@ -34,6 +36,7 @@ export default function OrdersList({ orders }: OrdersListProps) {
   const [selectedMonth, setSelectedMonth] = useState<string>('ALL');
   const [selectedYear, setSelectedYear] = useState<string>('ALL');
   const [selectedOrderForInvoice, setSelectedOrderForInvoice] = useState<OrderDetail | null>(null);
+  const [addItemsOrder, setAddItemsOrder] = useState<OrderRecord | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   // Month options in Indonesian
@@ -502,6 +505,18 @@ export default function OrdersList({ orders }: OrdersListProps) {
                             <FileText className="w-3.5 h-3.5 text-rose-500" /> Invoice
                           </button>
 
+                          {/* Action: Add Items if HOLD */}
+                          {order.status === 'HOLD' && (
+                            <button
+                              type="button"
+                              onClick={() => setAddItemsOrder(order)}
+                              className="px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs"
+                              title="Tambah item ke order ini"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Tambah
+                            </button>
+                          )}
+
                           {/* Action: Mark as Paid if HOLD */}
                           {order.status === 'HOLD' && (
                             <button
@@ -575,6 +590,15 @@ export default function OrdersList({ orders }: OrdersListProps) {
           isOpen={Boolean(selectedOrderForInvoice)}
           onClose={() => setSelectedOrderForInvoice(null)}
           order={selectedOrderForInvoice}
+        />
+      )}
+
+      {/* Add Items Modal */}
+      {addItemsOrder && (
+        <AddItemsModal
+          isOpen={Boolean(addItemsOrder)}
+          onClose={() => setAddItemsOrder(null)}
+          order={addItemsOrder}
         />
       )}
 

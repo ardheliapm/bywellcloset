@@ -271,3 +271,86 @@ export async function deleteOrder(orderId: string) {
   }
 }
 
+// 5. Add Items to an existing HOLD order
+export interface AddItemInput {
+  productId?: string;
+  productSku: string;
+  productName: string;
+  price: number;
+  quantity: number;
+}
+
+export async function addItemsToOrder(orderId: string, items: AddItemInput[]) {
+  try {
+    if (!items || items.length === 0) {
+      return { success: false, error: 'Minimal 1 produk harus ditambahkan' };
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
+
+    if (!order) {
+      return { success: false, error: 'Order tidak ditemukan' };
+    }
+
+    if (order.status !== 'HOLD') {
+      return { success: false, error: `Hanya order berstatus HOLD yang bisa ditambah item. Status saat ini: ${order.status}` };
+    }
+
+    // Calculate additional amount
+    const additionalAmount = items.reduce((acc, item) => {
+      const q = Math.max(1, Number(item.quantity) || 1);
+      const p = Math.max(0, Number(item.price) || 0);
+      return acc + q * p;
+    }, 0);
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Create new OrderItems
+      for (const item of items) {
+        const q = Math.max(1, Number(item.quantity) || 1);
+        const p = Math.max(0, Number(item.price) || 0);
+
+        await tx.orderItem.create({
+          data: {
+            orderId,
+            productId: item.productId || null,
+            productSku: item.productSku.trim().toUpperCase(),
+            productName: item.productName.trim(),
+            price: p,
+            quantity: q,
+            subtotal: p * q,
+          },
+        });
+
+        // 2. Increment reservedStock
+        if (item.productId) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              reservedStock: { increment: q },
+            },
+          });
+        }
+      }
+
+      // 3. Recalculate totalAmount
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          totalAmount: order.totalAmount + additionalAmount,
+        },
+      });
+    });
+
+    revalidatePath('/orders');
+    revalidatePath('/products');
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error adding items to order:', error);
+    return { success: false, error: error.message || 'Gagal menambahkan item ke order' };
+  }
+}
+
