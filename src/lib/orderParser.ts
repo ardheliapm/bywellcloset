@@ -11,6 +11,7 @@ export interface ParsedOrderItem {
 
 export interface ParseOrderResult {
   customerName: string;
+  customerPhone?: string;
   items: ParsedOrderItem[];
   totalQty: number;
   totalAmount: number;
@@ -96,8 +97,17 @@ export function parseWhatsAppOrderText<T extends ProductMatchable>(rawText: stri
     };
   }
 
-  // Line 1: Customer Name
-  const rawCustomer = lines[0].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
+  // Line 1: Customer Name & Phone Number Extraction
+  let rawCustomer = lines[0].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
+  let extractedPhone: string | undefined = undefined;
+
+  // Match phone number in Line 1 (e.g., KAK DELLA (081234567890) or KAK DELLA - 081234567890)
+  const phoneMatch = rawCustomer.match(/\b(08\d{8,11}|\+?628\d{8,11})\b/);
+  if (phoneMatch) {
+    extractedPhone = phoneMatch[1];
+    rawCustomer = rawCustomer.replace(phoneMatch[0], '').replace(/[\(\)\-\:\*\"\'\s]+/g, ' ').trim();
+  }
+
   const customerName = rawCustomer || 'Customer Tanpa Nama';
 
   // Remaining lines: Order Items
@@ -162,18 +172,19 @@ export function parseWhatsAppOrderText<T extends ProductMatchable>(rawText: stri
     };
   });
 
-  // Build Formatted WhatsApp Reply
+  // Build Internal Admin Confirmation Reply (Not external customer invoice)
   const itemLinesFormatted = items
     .map(
       (item) =>
-        `• ${item.productName} x${item.quantity} = Rp ${item.subtotal.toLocaleString('id-ID')}`
+        `• ${item.productName} (SKU: ${item.productSku}) x${item.quantity} pcs = Rp ${item.subtotal.toLocaleString('id-ID')}`
     )
     .join('\n');
 
-  const formattedReply = `✅ *ORDER BERHASIL DISIMPAN (STATUS: HOLD)*\n-----------------------------------\n👤 *Pelanggan*: ${customerName}\n📦 *Total Qty*: ${totalQty} pcs (Harga Tier: Rp ${unitPrice.toLocaleString('id-ID')}/pcs)\n\n*Rincian Barang*:\n${itemLinesFormatted}\n-----------------------------------\n💰 *TOTAL TAGIHAN*: Rp ${totalAmount.toLocaleString('id-ID')}\n\n*Status Stok*: Berhasil dikunci (reservedStock). Mohon segera lakukan verifikasi pembayaran.`;
+  const formattedReply = `🔒 *STOK BERHASIL DI-KEEP (STATUS: HOLD)*\n-----------------------------------\n👤 *Pelanggan*: ${customerName}\n📞 *No HP*: ${extractedPhone || 'Terdeteksi dari pengirim WA'}\n📦 *Total Qty*: ${totalQty} pcs (Tier: Rp ${unitPrice.toLocaleString('id-ID')}/pcs)\n\n*Rincian Barang Keep*:\n${itemLinesFormatted}\n-----------------------------------\n💰 *TOTAL TAGIHAN*: Rp ${totalAmount.toLocaleString('id-ID')}\n\n💡 *Status*: Stok terkunci (reservedStock). Invoice BELUM dikirim ke pelanggan.`;
 
   return {
     customerName,
+    customerPhone: extractedPhone,
     items,
     totalQty,
     totalAmount,

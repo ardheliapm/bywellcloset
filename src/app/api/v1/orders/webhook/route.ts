@@ -43,6 +43,8 @@ export async function POST(request: Request) {
       );
     }
 
+    const finalCustomerPhone = parseResult.customerPhone || (phone ? String(phone).trim() : null);
+
     // 5. Generate Order Number
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
@@ -54,10 +56,10 @@ export async function POST(request: Request) {
         data: {
           orderNumber,
           customerName: parseResult.customerName,
-          customerPhone: phone ? String(phone).trim() : null,
+          customerPhone: finalCustomerPhone,
           status: 'HOLD',
           totalAmount: parseResult.totalAmount,
-          notes: notes ? String(notes).trim() : 'Auto-created via n8n WA webhook',
+          notes: notes ? String(notes).trim() : 'Auto-created via WA Bot forward',
           items: {
             create: parseResult.items.map((item) => ({
               productId: item.productId || null,
@@ -98,12 +100,12 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: 'Order berhasil disimpan dan stokHOLD dikunci.',
+      message: 'Order berhasil disimpan dan stok HOLD dikunci.',
       data: {
         orderId: newOrder.id,
         orderNumber: newOrder.orderNumber,
         customerName: parseResult.customerName,
-        customerPhone: phone || null,
+        customerPhone: finalCustomerPhone,
         totalAmount: parseResult.totalAmount,
         totalQty: parseResult.totalQty,
         itemsCount: parseResult.items.length,
