@@ -14,9 +14,9 @@ export default function AppLayoutWrapper({ children }: { children: React.ReactNo
   }
 
   return (
-    <div className="bg-slate-50 text-slate-900 min-h-screen flex w-full">
+    <div className="bg-slate-50 text-slate-900 min-h-screen flex flex-col lg:flex-row w-full">
       <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
+      <div className="flex-1 flex flex-col min-w-0 lg:pl-64 w-full">
         <Header />
         <main className="flex-1 p-3.5 sm:p-6 max-w-7xl w-full mx-auto">{children}</main>
       </div>
