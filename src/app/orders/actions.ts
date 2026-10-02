@@ -111,20 +111,7 @@ export async function markOrderAsPaid(orderId: string) {
         }
       }
 
-      // 3. Deduct Ziplock stock (1 ziplock per hijab item)
-      if (totalHijabQty > 0) {
-        const ziplock = await tx.ziplockStock.findFirst();
-        if (ziplock && ziplock.stock > 0) {
-          await tx.ziplockStock.update({
-            where: { id: ziplock.id },
-            data: {
-              stock: Math.max(0, ziplock.stock - totalHijabQty),
-            },
-          });
-        }
-      }
-
-      // 4. Record Finance Income Transaction
+      // 3. Record Finance Income Transaction
       await tx.financeTransaction.create({
         data: {
           type: 'INCOME',
@@ -138,7 +125,6 @@ export async function markOrderAsPaid(orderId: string) {
 
     revalidatePath('/orders');
     revalidatePath('/products');
-    revalidatePath('/packaging');
     revalidatePath('/finance');
     revalidatePath('/');
     return { success: true };
@@ -280,7 +266,7 @@ export interface AddItemInput {
   quantity: number;
 }
 
-export async function addItemsToOrder(orderId: string, items: AddItemInput[]) {
+export async function addItemsToOrder(orderId: string, items: AddItemInput[], newUnitPrice?: number) {
   try {
     if (!items || items.length === 0) {
       return { success: false, error: 'Minimal 1 produk harus ditambahkan' };
@@ -299,32 +285,85 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[]) {
       return { success: false, error: `Hanya order berstatus HOLD yang bisa ditambah item. Status saat ini: ${order.status}` };
     }
 
-    // Calculate additional amount
-    const additionalAmount = items.reduce((acc, item) => {
-      const q = Math.max(1, Number(item.quantity) || 1);
-      const p = Math.max(0, Number(item.price) || 0);
-      return acc + q * p;
-    }, 0);
+    // Determine unit price across all items if tier price is used
+    const effectiveUnitPrice = newUnitPrice && newUnitPrice > 0 
+      ? newUnitPrice 
+      : (items[0]?.price && items[0].price > 0 ? items[0].price : null);
+
+    // Merge incoming new items by SKU / productId first
+    const incomingMap = new Map<string, AddItemInput>();
+    for (const it of items) {
+      const sku = it.productSku.trim().toUpperCase();
+      const key = it.productId || sku;
+      const q = Math.max(1, Number(it.quantity) || 1);
+      const p = effectiveUnitPrice || Math.max(0, Number(it.price) || 0);
+
+      if (incomingMap.has(key)) {
+        const exist = incomingMap.get(key)!;
+        exist.quantity += q;
+        exist.price = p;
+      } else {
+        incomingMap.set(key, {
+          productId: it.productId,
+          productSku: sku,
+          productName: it.productName.trim(),
+          price: p,
+          quantity: q,
+        });
+      }
+    }
+
+    const mergedIncomingItems = Array.from(incomingMap.values());
 
     await prisma.$transaction(async (tx) => {
-      // 1. Create new OrderItems
-      for (const item of items) {
+      // Map of existing items by productId / SKU
+      const existingItemsMap = new Map<string, typeof order.items[0]>();
+      for (const ex of order.items) {
+        const key = ex.productId || ex.productSku.trim().toUpperCase();
+        existingItemsMap.set(key, ex);
+      }
+
+      // 1. Process incoming items: either update existing or create new
+      const processedExistingIds = new Set<string>();
+
+      for (const item of mergedIncomingItems) {
+        const sku = item.productSku.trim().toUpperCase();
+        const key = item.productId || sku;
         const q = Math.max(1, Number(item.quantity) || 1);
-        const p = Math.max(0, Number(item.price) || 0);
+        const p = effectiveUnitPrice || Math.max(0, Number(item.price) || 0);
 
-        await tx.orderItem.create({
-          data: {
-            orderId,
-            productId: item.productId || null,
-            productSku: item.productSku.trim().toUpperCase(),
-            productName: item.productName.trim(),
-            price: p,
-            quantity: q,
-            subtotal: p * q,
-          },
-        });
+        const existingItem = existingItemsMap.get(key);
 
-        // 2. Increment reservedStock
+        if (existingItem) {
+          // Merge with existing item
+          processedExistingIds.add(existingItem.id);
+          const updatedQty = existingItem.quantity + q;
+          const updatedPrice = effectiveUnitPrice || p;
+
+          await tx.orderItem.update({
+            where: { id: existingItem.id },
+            data: {
+              price: updatedPrice,
+              quantity: updatedQty,
+              subtotal: updatedQty * updatedPrice,
+            },
+          });
+        } else {
+          // Create new OrderItem
+          await tx.orderItem.create({
+            data: {
+              orderId,
+              productId: item.productId || null,
+              productSku: sku,
+              productName: item.productName.trim(),
+              price: p,
+              quantity: q,
+              subtotal: p * q,
+            },
+          });
+        }
+
+        // Increment reservedStock
         if (item.productId) {
           await tx.product.update({
             where: { id: item.productId },
@@ -335,11 +374,32 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[]) {
         }
       }
 
-      // 3. Recalculate totalAmount
+      // 2. Update remaining existing items that weren't merged, to reflect new effectiveUnitPrice if tier changed
+      if (effectiveUnitPrice) {
+        for (const existingItem of order.items) {
+          if (!processedExistingIds.has(existingItem.id)) {
+            await tx.orderItem.update({
+              where: { id: existingItem.id },
+              data: {
+                price: effectiveUnitPrice,
+                subtotal: existingItem.quantity * effectiveUnitPrice,
+              },
+            });
+          }
+        }
+      }
+
+      // 3. Recalculate totalAmount of the entire order
+      const allUpdatedItems = await tx.orderItem.findMany({
+        where: { orderId },
+      });
+
+      const updatedTotalAmount = allUpdatedItems.reduce((acc, it) => acc + it.subtotal, 0);
+
       await tx.order.update({
         where: { id: orderId },
         data: {
-          totalAmount: order.totalAmount + additionalAmount,
+          totalAmount: updatedTotalAmount,
         },
       });
     });

@@ -199,13 +199,13 @@ BW76(3)`
 
     // Remaining lines: Order Items
     const itemLines = lines.slice(1);
-    const rawResults: {
+    const rawResultsMap = new Map<string, {
       rawText: string;
       product?: ProductMatchInfo | null;
       productSku: string;
       productName: string;
       quantity: number;
-    }[] = [];
+    }>();
 
     let tempTotalQty = 0;
 
@@ -229,18 +229,31 @@ BW76(3)`
       }
 
       itemName = itemName.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
+      if (!itemName) return;
+
       const matched = findBestProductMatch(itemName);
+      const sku = matched ? matched.sku : itemName.toUpperCase();
+      const name = matched ? matched.name : itemName;
+      const key = matched ? matched.id : sku;
 
       tempTotalQty += qty;
 
-      rawResults.push({
-        rawText: line,
-        product: matched,
-        productSku: matched ? matched.sku : itemName.toUpperCase(),
-        productName: matched ? matched.name : itemName,
-        quantity: qty,
-      });
+      if (rawResultsMap.has(key)) {
+        const exist = rawResultsMap.get(key)!;
+        exist.quantity += qty;
+        exist.rawText += ` + ${line}`;
+      } else {
+        rawResultsMap.set(key, {
+          rawText: line,
+          product: matched,
+          productSku: sku,
+          productName: name,
+          quantity: qty,
+        });
+      }
     });
+
+    const rawResults = Array.from(rawResultsMap.values());
 
     const activeTier = getResellerTier(tempTotalQty);
     const tierUnitPrice = activeTier.price;

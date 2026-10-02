@@ -156,7 +156,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       return;
     }
 
-    const results: ParsedNewItem[] = [];
+    const resultMap = new Map<string, ParsedNewItem>();
 
     lines.forEach((line) => {
       // Skip lines that look like customer names
@@ -178,17 +178,27 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       if (!itemName) return;
 
       const match = findBestProductMatch(itemName);
+      const sku = match?.sku || itemName.toUpperCase();
+      const key = match?.id || sku;
+      const parsedQty = Math.max(1, qty || 1);
 
-      results.push({
-        id: crypto.randomUUID(),
-        productId: match?.id,
-        productSku: match?.sku || itemName.toUpperCase(),
-        productName: match?.name || itemName,
-        price: unitPrice,
-        quantity: qty || 1,
-        isMatched: !!match,
-      });
+      if (resultMap.has(key)) {
+        const exist = resultMap.get(key)!;
+        exist.quantity += parsedQty;
+      } else {
+        resultMap.set(key, {
+          id: crypto.randomUUID(),
+          productId: match?.id,
+          productSku: sku,
+          productName: match?.name || itemName,
+          price: unitPrice,
+          quantity: parsedQty,
+          isMatched: !!match,
+        });
+      }
     });
+
+    const results = Array.from(resultMap.values());
 
     if (results.length === 0) {
       setError('Tidak ada item valid yang ditemukan dari teks.');
@@ -288,7 +298,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       quantity: it.quantity,
     }));
 
-    const result = await addItemsToOrder(order.id, payload);
+    const result = await addItemsToOrder(order.id, payload, unitPrice);
 
     if (result.success) {
       setSuccessMsg(`Berhasil menambahkan ${items.length} item ke Order #${order.orderNumber}!`);
@@ -304,7 +314,8 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
   if (!isOpen) return null;
 
-  const additionalTotal = currentItems.reduce((acc, it) => acc + it.price * it.quantity, 0);
+  const newTotalOrderAmount = combinedTotalQty * unitPrice;
+  const differenceAmount = newTotalOrderAmount - order.totalAmount;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -546,22 +557,32 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
               {/* Summary */}
               {currentItems.length > 0 && (
-                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                <div className="p-3.5 rounded-xl bg-violet-50/50 border border-violet-200/80 space-y-2">
                   <div className="flex justify-between text-xs text-slate-600">
-                    <span>Item baru yang akan ditambahkan:</span>
-                    <span className="font-bold">{currentItems.length} item ({newQty} pcs)</span>
+                    <span>Item baru yang ditambahkan:</span>
+                    <span className="font-bold text-slate-800">{currentItems.length} item ({newQty} pcs)</span>
                   </div>
                   <div className="flex justify-between text-xs text-slate-600">
                     <span>Total qty gabungan (lama + baru):</span>
-                    <span className="font-bold">{existingQty} + {newQty} = {combinedTotalQty} pcs</span>
+                    <span className="font-bold text-slate-800">{existingQty} + {newQty} = {combinedTotalQty} pcs</span>
                   </div>
                   <div className="flex justify-between text-xs text-slate-600">
-                    <span>Harga per pcs (tier {combinedTotalQty} pcs):</span>
-                    <span className="font-bold text-violet-700">{formatRupiah(unitPrice)}</span>
+                    <span>Harga satuan baru (Tier {combinedTotalQty} pcs):</span>
+                    <span className="font-bold text-violet-700">{formatRupiah(unitPrice)} /pcs (berlaku untuk semua pcs)</span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold border-t border-slate-200 pt-1.5 text-slate-800">
-                    <span>Tambahan tagihan:</span>
-                    <span className="text-rose-600">{formatRupiah(additionalTotal)}</span>
+                  <div className="pt-1.5 border-t border-violet-200/60 space-y-1">
+                    <div className="flex justify-between text-xs text-slate-500">
+                      <span>Tagihan sebelumnya:</span>
+                      <span>{formatRupiah(order.totalAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-slate-500">
+                      <span>Tambahan yang harus dibayar:</span>
+                      <span className="font-semibold text-emerald-700">+{formatRupiah(differenceAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm font-bold pt-1 text-slate-900 border-t border-violet-200/40">
+                      <span>Total Tagihan Baru Keseluruhan:</span>
+                      <span className="text-rose-600 text-base">{formatRupiah(newTotalOrderAmount)}</span>
+                    </div>
                   </div>
                 </div>
               )}

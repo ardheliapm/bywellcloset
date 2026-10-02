@@ -7,9 +7,9 @@ import Header from '@/components/Header';
 
 export default function AppLayoutWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isLoginPage = pathname === '/login';
+  const isAuthPage = pathname === '/pin' || pathname === '/login';
 
-  if (isLoginPage) {
+  if (isAuthPage) {
     return <main className="min-h-screen w-full bg-slate-950">{children}</main>;
   }
 

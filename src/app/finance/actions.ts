@@ -14,6 +14,19 @@ export interface FinanceTransactionRecord {
   createdAt: Date;
 }
 
+export interface PaidOrderSummary {
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  customerPhone: string | null;
+  paidAt: Date | null;
+  totalAmount: number;
+  totalQty: number;
+  totalCOGS: number;
+  grossProfit: number;
+  itemsSummary: string;
+}
+
 export interface FinanceSummaryData {
   totalIncome: number;
   totalCOGS: number;
@@ -21,17 +34,28 @@ export interface FinanceSummaryData {
   totalExpenses: number;
   netProfit: number;
   transactions: FinanceTransactionRecord[];
+  paidOrders: PaidOrderSummary[];
+  availableYears: number[];
 }
 
 export async function getFinanceSummary(month?: number, year?: number): Promise<FinanceSummaryData> {
   try {
     const selectedYear = year || new Date().getFullYear();
-    const selectedMonth = month !== undefined ? month : new Date().getMonth() + 1; // 1-12
+    const isAllMonths = month === 0;
 
-    const startDate = new Date(selectedYear, selectedMonth - 1, 1);
-    const endDate = new Date(selectedYear, selectedMonth, 0, 23, 59, 59);
+    let startDate: Date;
+    let endDate: Date;
 
-    // 1. Fetch Finance Transactions for this month
+    if (isAllMonths) {
+      startDate = new Date(selectedYear, 0, 1, 0, 0, 0, 0);
+      endDate = new Date(selectedYear, 11, 31, 23, 59, 59, 999);
+    } else {
+      const selectedMonth = month !== undefined && month > 0 ? month : new Date().getMonth() + 1; // 1-12
+      startDate = new Date(selectedYear, selectedMonth - 1, 1, 0, 0, 0, 0);
+      endDate = new Date(selectedYear, selectedMonth, 0, 23, 59, 59, 999);
+    }
+
+    // 1. Fetch Finance Transactions for this period
     const transactions = await prisma.financeTransaction.findMany({
       where: {
         transactionDate: {
@@ -54,7 +78,7 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
       }
     });
 
-    // 3. Calculate Total COGS (HPP Terjual) from Orders paid/shipped in this month
+    // 3. Calculate Total COGS (HPP Terjual) from Orders paid/shipped in this period
     const paidOrders = await prisma.order.findMany({
       where: {
         status: { in: ['PAID', 'SHIPPED'] },
@@ -64,18 +88,69 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
         },
       },
       include: { items: true },
+      orderBy: { paidAt: 'desc' },
     });
 
     let totalCOGS = 0;
-    paidOrders.forEach((order) => {
+    const paidOrdersSummary: PaidOrderSummary[] = paidOrders.map((order) => {
+      let orderCOGS = 0;
+      let orderQty = 0;
+      const itemsList: string[] = [];
+
       order.items.forEach((item) => {
         const itemHpp = item.costPrice > 0 ? item.costPrice : 20000;
-        totalCOGS += itemHpp * item.quantity;
+        orderCOGS += itemHpp * item.quantity;
+        orderQty += item.quantity;
+        itemsList.push(`${item.productName} (${item.quantity} pcs)`);
       });
+
+      totalCOGS += orderCOGS;
+
+      return {
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        paidAt: order.paidAt,
+        totalAmount: order.totalAmount,
+        totalQty: orderQty,
+        totalCOGS: orderCOGS,
+        grossProfit: order.totalAmount - orderCOGS,
+        itemsSummary: itemsList.join(', '),
+      };
     });
 
     const grossProfit = totalIncome - totalCOGS;
     const netProfit = grossProfit - totalExpenses;
+
+    // 4. Fetch dynamic available years from database timestamp
+    const [txDates, orderDates] = await Promise.all([
+      prisma.financeTransaction.findMany({
+        select: { transactionDate: true },
+      }),
+      prisma.order.findMany({
+        where: { status: { in: ['PAID', 'SHIPPED'] } },
+        select: { paidAt: true, createdAt: true },
+      }),
+    ]);
+
+    const yearsSet = new Set<number>();
+    const currentYear = new Date().getFullYear();
+    yearsSet.add(currentYear);
+    yearsSet.add(currentYear + 1);
+    yearsSet.add(currentYear - 1);
+    yearsSet.add(selectedYear);
+
+    txDates.forEach((t) => {
+      if (t.transactionDate) yearsSet.add(new Date(t.transactionDate).getFullYear());
+    });
+
+    orderDates.forEach((o) => {
+      if (o.paidAt) yearsSet.add(new Date(o.paidAt).getFullYear());
+      if (o.createdAt) yearsSet.add(new Date(o.createdAt).getFullYear());
+    });
+
+    const availableYears = Array.from(yearsSet).sort((a, b) => b - a);
 
     return {
       totalIncome,
@@ -84,6 +159,8 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
       totalExpenses,
       netProfit,
       transactions,
+      paidOrders: paidOrdersSummary,
+      availableYears,
     };
   } catch (error) {
     console.error('Error fetching finance summary:', error);
@@ -94,6 +171,8 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
       totalExpenses: 0,
       netProfit: 0,
       transactions: [],
+      paidOrders: [],
+      availableYears: [new Date().getFullYear() + 1, new Date().getFullYear(), new Date().getFullYear() - 1],
     };
   }
 }

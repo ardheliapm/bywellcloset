@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
-import { Bell, UserCheck, KeyRound } from 'lucide-react';
-import ChangePasswordModal from './ChangePasswordModal';
+import { KeyRound, Lock, UserCheck } from 'lucide-react';
+import ChangePinModal from './ChangePinModal';
+import { lockApp } from '@/app/pin/actions';
 
 const titleMap: Record<string, string> = {
   '/': 'Dashboard Overview',
@@ -11,14 +12,16 @@ const titleMap: Record<string, string> = {
   '/stock-in': 'Stok Masuk (Stock In)',
   '/paste-order': 'Paste Order WhatsApp',
   '/orders': 'Daftar Order Pelanggan',
+  '/motif-analysis': 'Analisis & Performa Motif',
+  '/finance': 'Keuangan & Laba Rugi',
   '/stock-history': 'Riwayat Mutasi Stok',
 };
 
 export default function Header() {
   const pathname = usePathname();
-  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [isPinModalOpen, setIsPinModalOpen] = useState(false);
 
-  if (pathname === '/login') return null;
+  if (pathname === '/pin' || pathname === '/login') return null;
 
   const title = titleMap[pathname] || 'Bywell Closet Inventory';
 
@@ -31,14 +34,26 @@ export default function Header() {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {/* Change PIN Button */}
           <button
             type="button"
-            onClick={() => setIsPasswordModalOpen(true)}
+            onClick={() => setIsPinModalOpen(true)}
             className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
-            title="Ubah Password Akun"
+            title="Ubah PIN Akses"
           >
             <KeyRound className="w-4 h-4 text-rose-500" />
-            <span className="hidden sm:inline">Ubah Password</span>
+            <span className="hidden sm:inline">Ganti PIN</span>
+          </button>
+
+          {/* Quick Lock Button */}
+          <button
+            type="button"
+            onClick={() => lockApp()}
+            className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-slate-600 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
+            title="Kunci Layar Aplikasi"
+          >
+            <Lock className="w-4 h-4 text-slate-500" />
+            <span className="hidden sm:inline">Kunci</span>
           </button>
 
           <div className="h-5 sm:h-6 w-px bg-slate-200"></div>
@@ -48,16 +63,16 @@ export default function Header() {
               <UserCheck className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
             <div className="hidden sm:block text-left">
-              <p className="text-sm font-semibold text-slate-800 leading-tight">Admin Bywell</p>
-              <p className="text-xs text-slate-400">Kasir / Admin Stok</p>
+              <p className="text-sm font-semibold text-slate-800 leading-tight">Bywell Closet</p>
+              <p className="text-xs text-slate-400">Kasir / Admin</p>
             </div>
           </div>
         </div>
       </header>
 
-      <ChangePasswordModal
-        isOpen={isPasswordModalOpen}
-        onClose={() => setIsPasswordModalOpen(false)}
+      <ChangePinModal
+        isOpen={isPinModalOpen}
+        onClose={() => setIsPinModalOpen(false)}
       />
     </>
   );

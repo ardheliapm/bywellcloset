@@ -67,17 +67,45 @@ export async function createOrder(data: CreateOrderInput) {
       return { success: false, error: 'Order harus memiliki minimal 1 produk' };
     }
 
+    // 1. Merge duplicate items by SKU / productId
+    const mergedMap = new Map<string, {
+      productId: string | null;
+      productSku: string;
+      productName: string;
+      price: number;
+      quantity: number;
+    }>();
+
+    for (const item of data.items) {
+      const sku = item.productSku.trim().toUpperCase();
+      const key = item.productId || sku;
+      const q = Math.max(1, Number(item.quantity) || 1);
+      const p = Math.max(0, Number(item.price) || 0);
+
+      if (mergedMap.has(key)) {
+        const exist = mergedMap.get(key)!;
+        exist.quantity += q;
+        exist.price = p;
+      } else {
+        mergedMap.set(key, {
+          productId: item.productId || null,
+          productSku: sku,
+          productName: item.productName.trim(),
+          price: p,
+          quantity: q,
+        });
+      }
+    }
+
+    const mergedItems = Array.from(mergedMap.values());
+
     // Generate Order Number: ORD-YYYYMMDD-XXXX
     const todayStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const orderNumber = `ORD-${todayStr}-${randomSuffix}`;
 
     // Calculate total
-    const totalAmount = data.items.reduce((acc, item) => {
-      const q = Math.max(1, Number(item.quantity) || 1);
-      const p = Math.max(0, Number(item.price) || 0);
-      return acc + q * p;
-    }, 0);
+    const totalAmount = mergedItems.reduce((acc, item) => acc + item.quantity * item.price, 0);
 
     // Run transaction: create order, order_items, and increment reservedStock
     const result = await prisma.$transaction(async (tx) => {
@@ -91,18 +119,14 @@ export async function createOrder(data: CreateOrderInput) {
           totalAmount,
           notes: data.notes?.trim() || null,
           items: {
-            create: data.items.map((item) => {
-              const q = Math.max(1, Number(item.quantity) || 1);
-              const p = Math.max(0, Number(item.price) || 0);
-              return {
-                productId: item.productId || null,
-                productSku: item.productSku.trim().toUpperCase(),
-                productName: item.productName.trim(),
-                price: p,
-                quantity: q,
-                subtotal: p * q,
-              };
-            }),
+            create: mergedItems.map((item) => ({
+              productId: item.productId,
+              productSku: item.productSku,
+              productName: item.productName,
+              price: item.price,
+              quantity: item.quantity,
+              subtotal: item.price * item.quantity,
+            })),
           },
         },
         include: {
@@ -111,14 +135,13 @@ export async function createOrder(data: CreateOrderInput) {
       });
 
       // 2. Increment reservedStock for each product
-      for (const item of data.items) {
+      for (const item of mergedItems) {
         if (item.productId) {
-          const qty = Math.max(1, Number(item.quantity) || 1);
           await tx.product.update({
             where: { id: item.productId },
             data: {
               reservedStock: {
-                increment: qty,
+                increment: item.quantity,
               },
             },
           });

@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useTransition } from 'react';
-import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import React, { useState, useEffect, useTransition, useMemo } from 'react';
+import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight, Printer } from 'lucide-react';
+import XLSX from 'xlsx-js-style';
 import { FinanceSummaryData, FinanceTransactionRecord, addFinanceTransaction, updateFinanceTransaction, deleteFinanceTransaction, getFinanceSummary } from './actions';
+import FinanceReportModal from './FinanceReportModal';
 
 interface FinanceClientProps {
   initialSummary: FinanceSummaryData;
@@ -17,8 +18,9 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
   const [selectedYear, setSelectedYear] = useState<number>(initialYear);
   const [isPending, startTransition] = useTransition();
 
-  // Form State for Adding/Editing Transaction
+  // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [editingTx, setEditingTx] = useState<FinanceTransactionRecord | null>(null);
   const [type, setType] = useState<'INCOME' | 'EXPENSE'>('EXPENSE');
   const [category, setCategory] = useState<string>('SALARY');
@@ -101,6 +103,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
   };
 
   const monthsList = [
+    { value: 0, label: 'Semua Bulan (Rekap 1 Tahun)' },
     { value: 1, label: 'Januari' },
     { value: 2, label: 'Februari' },
     { value: 3, label: 'Maret' },
@@ -114,6 +117,24 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
     { value: 11, label: 'November' },
     { value: 12, label: 'Desember' },
   ];
+
+  // Dynamic available years discovered from timestamps in database
+  const availableYearsList = useMemo(() => {
+    const list = summary.availableYears && summary.availableYears.length > 0
+      ? summary.availableYears
+      : [selectedYear + 1, selectedYear, selectedYear - 1];
+
+    if (!list.includes(selectedYear)) {
+      return [selectedYear, ...list].sort((a, b) => b - a);
+    }
+    return list;
+  }, [summary.availableYears, selectedYear]);
+
+  const selectedPeriodLabel = useMemo(() => {
+    if (selectedMonth === 0) return `Rekap Tahun ${selectedYear}`;
+    const found = monthsList.find((m) => m.value === selectedMonth);
+    return found ? `${found.label} ${selectedYear}` : `${selectedYear}`;
+  }, [selectedMonth, selectedYear]);
 
   const handleFilterChange = (m: number, y: number) => {
     setSelectedMonth(m);
@@ -165,20 +186,350 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
   };
 
   const handleExportExcel = () => {
-    const exportData = summary.transactions.map((tx, idx) => ({
-      'No': idx + 1,
-      'Tanggal': new Date(tx.transactionDate).toLocaleDateString('id-ID'),
-      'Tipe': tx.type === 'INCOME' ? 'Pemasukan (Kas Masuk)' : 'Pengeluaran (Kas Keluar)',
-      'Kategori': tx.category,
-      'Keterangan': tx.description,
-      'Nominal (Rp)': tx.amount,
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Keuangan');
 
-    XLSX.writeFile(workbook, `Laporan_Keuangan_Bywell_${selectedMonth}_${selectedYear}.xlsx`);
+    // ----------------------------------------------------
+    // SHEET 1: Jurnal Keuangan & Laba Rugi Eksekutif
+    // ----------------------------------------------------
+    const sortedTx = [...summary.transactions].sort(
+      (a, b) => new Date(a.transactionDate).getTime() - new Date(b.transactionDate).getTime()
+    );
+
+    let runningBalance = 0;
+    const cashFlowRows = sortedTx.map((tx, idx) => {
+      const isIncome = tx.type === 'INCOME';
+      const incomeAmt = isIncome ? tx.amount : 0;
+      const expenseAmt = !isIncome ? tx.amount : 0;
+      runningBalance += isIncome ? tx.amount : -tx.amount;
+
+      let catLabel = tx.category;
+      if (tx.category === 'SALES') catLabel = 'Penjualan (Sales)';
+      else if (tx.category === 'ONG_KIR_RESTOK') catLabel = 'Ongkir Restok';
+      else if (tx.category === 'SALARY') catLabel = 'Gaji Karyawan';
+      else if (tx.category === 'MOTIF') catLabel = 'Desain Motif';
+      else if (tx.category === 'ZIPLOCK' || tx.category === 'PACKAGING') catLabel = 'Packaging';
+      else if (tx.category === 'OPERATIONAL') catLabel = 'Operasional';
+
+      return [
+        idx + 1,
+        new Date(tx.transactionDate).toLocaleDateString('id-ID'),
+        tx.referenceId || '-',
+        catLabel,
+        tx.description,
+        incomeAmt,
+        expenseAmt,
+        runningBalance,
+      ];
+    });
+
+    const grossMarginPercent = summary.totalIncome > 0
+      ? `${((summary.grossProfit / summary.totalIncome) * 100).toFixed(1)}%`
+      : '0%';
+    const netMarginPercent = summary.totalIncome > 0
+      ? `${((summary.netProfit / summary.totalIncome) * 100).toFixed(1)}%`
+      : '0%';
+
+    const sheet1Data = [
+      ['BYWELL CLOSET - LAPORAN KEUANGAN & JURNAL ARUS KAS'],
+      ['Periode Laporan:', selectedPeriodLabel, '', 'Tanggal Cetak:', new Date().toLocaleString('id-ID')],
+      [],
+      ['=== RINGKASAN EKSEKUTIF FINANSIAL ===', '', '', '', '', '', '', ''],
+      ['Indikator Finansial', 'Nilai (Rp)', '', 'Indikator Margin & Saldo', 'Nilai / Persentase', '', '', ''],
+      ['Total Omset Penjualan (Income)', summary.totalIncome, '', 'Margin Laba Kotor (Gross Margin)', grossMarginPercent, '', '', ''],
+      ['Total HPP Modal Barang Terjual (COGS)', summary.totalCOGS, '', 'Margin Laba Bersih (Net Margin)', netMarginPercent, '', '', ''],
+      ['Laba Kotor (Gross Profit)', summary.grossProfit, '', 'Net Arus Kas (Pemasukan - Pengeluaran)', summary.totalIncome - summary.totalExpenses, '', '', ''],
+      ['Total Biaya Pengeluaran (Expense)', summary.totalExpenses, '', 'Total Transaksi Mutasi', `${summary.transactions.length} Transaksi`, '', '', ''],
+      ['LABA BERSIH (NET PROFIT AKHIR)', summary.netProfit, '', 'Total Order Penjualan', `${summary.paidOrders?.length || 0} Order Terjual`, '', '', ''],
+      [],
+      ['=== BUKU JURNAL ARUS KAS (MUTASI KAS MASUK & KELUAR) ===', '', '', '', '', '', '', ''],
+      ['No', 'Tanggal', 'No. Referensi / Order', 'Kategori', 'Keterangan Transaksi', 'Kas Masuk / Debit (Rp)', 'Kas Keluar / Kredit (Rp)', 'Saldo Kas (Rp)'],
+      ...cashFlowRows,
+      [
+        'TOTAL',
+        '',
+        '',
+        '',
+        'Total Arus Kas Keseluruhan Periode Ini',
+        summary.totalIncome,
+        summary.totalExpenses,
+        summary.totalIncome - summary.totalExpenses,
+      ],
+    ];
+
+    const ws1 = XLSX.utils.aoa_to_sheet(sheet1Data);
+    ws1['!cols'] = [
+      { wch: 6 },  // No
+      { wch: 14 }, // Tanggal
+      { wch: 24 }, // No. Ref / Order
+      { wch: 22 }, // Kategori
+      { wch: 45 }, // Keterangan
+      { wch: 24 }, // Kas Masuk
+      { wch: 24 }, // Kas Keluar
+      { wch: 22 }, // Saldo Kas
+    ];
+
+    // Rich styling for ws1
+    if (ws1['A1']) {
+      ws1['A1'].s = {
+        font: { name: 'Calibri', sz: 14, bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: 'BE123C' } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+      };
+    }
+    ['A2', 'B2', 'D2', 'E2'].forEach((k) => {
+      if (ws1[k]) {
+        ws1[k].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '475569' } },
+          fill: { fgColor: { rgb: 'F8FAFC' } },
+        };
+      }
+    });
+    ['A4', 'A12'].forEach((k) => {
+      if (ws1[k]) {
+        ws1[k].s = {
+          font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: '0F172A' } },
+          fill: { fgColor: { rgb: 'E2E8F0' } },
+        };
+      }
+    });
+    ['A5', 'B5', 'D5', 'E5'].forEach((k) => {
+      if (ws1[k]) {
+        ws1[k].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '334155' } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+        };
+      }
+    });
+    for (let r = 6; r <= 10; r++) {
+      ['A', 'D'].forEach((col) => {
+        const cell = ws1[`${col}${r}`];
+        if (cell) {
+          cell.s = {
+            font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '334155' } },
+            fill: { fgColor: { rgb: 'F8FAFC' } },
+          };
+        }
+      });
+      ['B', 'E'].forEach((col) => {
+        const cell = ws1[`${col}${r}`];
+        if (cell) {
+          const isOmset = r === 6 && col === 'B';
+          const isNet = r === 10 && col === 'B';
+          const isExpense = r === 9 && col === 'B';
+          cell.s = {
+            font: {
+              name: 'Calibri',
+              sz: isNet ? 11 : 10,
+              bold: true,
+              color: { rgb: isNet ? 'FFFFFF' : isOmset ? '047857' : isExpense ? 'BE123C' : '0F172A' },
+            },
+            fill: { fgColor: { rgb: isNet ? '0F172A' : isOmset ? 'ECFDF5' : isExpense ? 'FFF1F2' : 'F1F5F9' } },
+            alignment: { horizontal: typeof cell.v === 'number' ? 'right' : 'center', vertical: 'center' },
+            numFmt: typeof cell.v === 'number' ? '#,##0' : undefined,
+          };
+        }
+      });
+    }
+
+    ['A13', 'B13', 'C13', 'D13', 'E13', 'F13', 'G13', 'H13'].forEach((k) => {
+      if (ws1[k]) {
+        ws1[k].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1E293B' } },
+          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        };
+      }
+    });
+
+    const journalStartRow = 14;
+    const journalEndRow = 13 + cashFlowRows.length;
+    for (let r = journalStartRow; r <= journalEndRow; r++) {
+      const isEven = r % 2 === 0;
+      const bg = isEven ? 'F8FAFC' : 'FFFFFF';
+      ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach((col) => {
+        const cell = ws1[`${col}${r}`];
+        if (cell) {
+          const isIncome = col === 'F';
+          const isExpense = col === 'G';
+          const isBalance = col === 'H';
+          cell.s = {
+            font: {
+              name: 'Calibri',
+              sz: 10,
+              bold: isBalance || isIncome || isExpense,
+              color: { rgb: isIncome ? '047857' : isExpense ? 'BE123C' : '1E293B' },
+            },
+            fill: { fgColor: { rgb: bg } },
+            alignment: {
+              horizontal: col === 'A' || col === 'B' ? 'center' : col === 'F' || col === 'G' || col === 'H' ? 'right' : 'left',
+              vertical: 'center',
+            },
+            numFmt: typeof cell.v === 'number' ? '#,##0' : undefined,
+            border: {
+              bottom: { style: 'thin', color: { rgb: 'E2E8F0' } },
+            },
+          };
+        }
+      });
+    }
+
+    const totalRowIndex = journalEndRow + 1;
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].forEach((col) => {
+      const cell = ws1[`${col}${totalRowIndex}`];
+      if (cell) {
+        cell.s = {
+          font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: '0F172A' } },
+          fill: { fgColor: { rgb: 'E2E8F0' } },
+          alignment: { horizontal: col === 'A' || col === 'E' ? 'center' : 'right', vertical: 'center' },
+          numFmt: typeof cell.v === 'number' ? '#,##0' : undefined,
+          border: {
+            top: { style: 'thin', color: { rgb: '94A3B8' } },
+            bottom: { style: 'double', color: { rgb: '0F172A' } },
+          },
+        };
+      }
+    });
+
+    XLSX.utils.book_append_sheet(workbook, ws1, 'Jurnal & Laba Rugi');
+
+    // ----------------------------------------------------
+    // SHEET 2: Rincian Penjualan & Profit per Order
+    // ----------------------------------------------------
+    const paidOrders = summary.paidOrders || [];
+    const salesRows = paidOrders.map((ord, idx) => [
+      idx + 1,
+      ord.paidAt ? new Date(ord.paidAt).toLocaleDateString('id-ID') : '-',
+      ord.orderNumber,
+      ord.customerName,
+      ord.customerPhone || '-',
+      ord.itemsSummary,
+      ord.totalQty,
+      ord.totalAmount,
+      ord.totalCOGS,
+      ord.grossProfit,
+      ord.totalAmount > 0 ? `${((ord.grossProfit / ord.totalAmount) * 100).toFixed(1)}%` : '0%',
+    ]);
+
+    const totalSalesQty = paidOrders.reduce((acc, o) => acc + o.totalQty, 0);
+    const totalSalesAmount = paidOrders.reduce((acc, o) => acc + o.totalAmount, 0);
+    const totalSalesCOGS = paidOrders.reduce((acc, o) => acc + o.totalCOGS, 0);
+    const totalSalesGross = paidOrders.reduce((acc, o) => acc + o.grossProfit, 0);
+
+    const sheet2Data = [
+      ['BYWELL CLOSET - RINCIAN PENJUALAN & KEUNTUNGAN PER ORDER'],
+      ['Periode Laporan:', selectedPeriodLabel, '', 'Total Order Terjual:', `${paidOrders.length} Order`],
+      [],
+      ['No', 'Tanggal Lunas', 'No. Order', 'Nama Customer', 'No. WhatsApp', 'Rincian Produk & Qty', 'Total Qty (pcs)', 'Omset Penjualan (Rp)', 'HPP Modal (Rp)', 'Laba Kotor (Rp)', 'Margin (%)'],
+      ...salesRows,
+      [
+        'TOTAL',
+        '',
+        '',
+        '',
+        '',
+        'Total Akumulasi Order Terjual',
+        totalSalesQty,
+        totalSalesAmount,
+        totalSalesCOGS,
+        totalSalesGross,
+        totalSalesAmount > 0 ? `${((totalSalesGross / totalSalesAmount) * 100).toFixed(1)}%` : '0%',
+      ],
+    ];
+
+    const ws2 = XLSX.utils.aoa_to_sheet(sheet2Data);
+    ws2['!cols'] = [
+      { wch: 6 },  // No
+      { wch: 14 }, // Tanggal Lunas
+      { wch: 24 }, // No. Order
+      { wch: 22 }, // Nama Customer
+      { wch: 16 }, // WhatsApp
+      { wch: 45 }, // Rincian Produk
+      { wch: 15 }, // Total Qty
+      { wch: 22 }, // Omset Penjualan
+      { wch: 18 }, // HPP Modal
+      { wch: 18 }, // Laba Kotor
+      { wch: 12 }, // Margin %
+    ];
+
+    if (ws2['A1']) {
+      ws2['A1'].s = {
+        font: { name: 'Calibri', sz: 14, bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '0F172A' } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+      };
+    }
+    ['A2', 'B2', 'D2', 'E2'].forEach((k) => {
+      if (ws2[k]) {
+        ws2[k].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: '475569' } },
+          fill: { fgColor: { rgb: 'F8FAFC' } },
+        };
+      }
+    });
+
+    ['A4', 'B4', 'C4', 'D4', 'E4', 'F4', 'G4', 'H4', 'I4', 'J4', 'K4'].forEach((k) => {
+      if (ws2[k]) {
+        ws2[k].s = {
+          font: { name: 'Calibri', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+          fill: { fgColor: { rgb: '1E293B' } },
+          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        };
+      }
+    });
+
+    const salesStartRow = 5;
+    const salesEndRow = 4 + salesRows.length;
+    for (let r = salesStartRow; r <= salesEndRow; r++) {
+      const isEven = r % 2 === 0;
+      const bg = isEven ? 'F8FAFC' : 'FFFFFF';
+      ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'].forEach((col) => {
+        const cell = ws2[`${col}${r}`];
+        if (cell) {
+          const isProfit = col === 'J';
+          cell.s = {
+            font: {
+              name: 'Calibri',
+              sz: 10,
+              bold: isProfit,
+              color: { rgb: isProfit ? '047857' : '1E293B' },
+            },
+            fill: { fgColor: { rgb: bg } },
+            alignment: {
+              horizontal: col === 'A' || col === 'B' || col === 'C' || col === 'G' || col === 'K' ? 'center' : col === 'H' || col === 'I' || col === 'J' ? 'right' : 'left',
+              vertical: 'center',
+            },
+            numFmt: typeof cell.v === 'number' ? '#,##0' : undefined,
+            border: {
+              bottom: { style: 'thin', color: { rgb: 'E2E8F0' } },
+            },
+          };
+        }
+      });
+    }
+
+    const totalSalesRowIndex = salesEndRow + 1;
+    ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'].forEach((col) => {
+      const cell = ws2[`${col}${totalSalesRowIndex}`];
+      if (cell) {
+        cell.s = {
+          font: { name: 'Calibri', sz: 11, bold: true, color: { rgb: '0F172A' } },
+          fill: { fgColor: { rgb: 'E2E8F0' } },
+          alignment: { horizontal: col === 'A' || col === 'F' ? 'center' : 'right', vertical: 'center' },
+          numFmt: typeof cell.v === 'number' ? '#,##0' : undefined,
+          border: {
+            top: { style: 'thin', color: { rgb: '94A3B8' } },
+            bottom: { style: 'double', color: { rgb: '0F172A' } },
+          },
+        };
+      }
+    });
+
+    XLSX.utils.book_append_sheet(workbook, ws2, 'Rincian Penjualan & Profit');
+
+    // Save File
+    const periodName = selectedMonth === 0 ? `Semua_Bulan_${selectedYear}` : `Bulan_${selectedMonth}_${selectedYear}`;
+    XLSX.writeFile(workbook, `Laporan_Keuangan_Bywell_${periodName}.xlsx`);
   };
 
   const getCategoryBadge = (cat: string) => {
@@ -186,7 +537,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
       case 'ONG_KIR_RESTOK':
         return <span className="px-2.5 py-0.5 rounded-md bg-amber-50 text-amber-800 text-[11px] font-semibold border border-amber-200">🚚 Ongkir Restok</span>;
       case 'ZIPLOCK':
-        return <span className="px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-800 text-[11px] font-semibold border border-purple-200">📦 Ziplock</span>;
+        return <span className="px-2.5 py-0.5 rounded-md bg-purple-50 text-purple-800 text-[11px] font-semibold border border-purple-200">📦 Packaging</span>;
       case 'MOTIF':
         return <span className="px-2.5 py-0.5 rounded-md bg-pink-50 text-pink-800 text-[11px] font-semibold border border-pink-200">✨ Desain Motif</span>;
       case 'SALARY':
@@ -209,10 +560,10 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
             <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 flex items-center justify-center">
               <Wallet className="w-5 h-5" />
             </div>
-            Keuangan & Laba Rugi Bulanan
+            Keuangan & Laba Rugi {selectedMonth === 0 ? 'Tahunan' : 'Bulanan'}
           </h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Laporan lengkap Omset, Total HPP Terjual, Pengeluaran Operasional, dan Profit Bersih Bulanan.
+            Laporan lengkap Omset, Total HPP Terjual, Pengeluaran Operasional, dan Profit Bersih ({selectedPeriodLabel}).
           </p>
         </div>
 
@@ -234,14 +585,14 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
             </select>
           </div>
 
-          {/* Year Dropdown */}
+          {/* Year Dropdown - Dynamic from timestamps */}
           <div className="bg-white border border-slate-200 rounded-xl px-3 py-2 shadow-xs">
             <select
               value={selectedYear}
               onChange={(e) => handleFilterChange(selectedMonth, parseInt(e.target.value, 10))}
               className="text-xs font-bold text-slate-800 focus:outline-hidden bg-transparent cursor-pointer"
             >
-              {[2024, 2025, 2026, 2027].map((y) => (
+              {availableYearsList.map((y) => (
                 <option key={y} value={y}>
                   {y}
                 </option>
@@ -252,9 +603,17 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
           <button
             type="button"
             onClick={handleExportExcel}
-            className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
+            className="px-3.5 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Ekspor Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsReportModalOpen(true)}
+            className="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
+          >
+            <Printer className="w-4 h-4 text-rose-600" /> Cetak / Unduh PDF
           </button>
 
           <button
@@ -290,7 +649,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
             </div>
           </div>
           <p className="text-2xl font-bold text-slate-800">{formatRupiah(summary.totalCOGS)}</p>
-          <p className="text-[11px] text-slate-400">Modal produk (Kain + Jahit + Ziplock)</p>
+          <p className="text-[11px] text-slate-400">Modal produk (Kain + Jahit)</p>
         </div>
 
         {/* Card 3: Total Pengeluaran (Expenses) */}
@@ -302,7 +661,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
             </div>
           </div>
           <p className="text-2xl font-bold text-rose-700">{formatRupiah(summary.totalExpenses)}</p>
-          <p className="text-[11px] text-slate-400">Ongkir restok, Motif, Gaji, Plastik, dll</p>
+          <p className="text-[11px] text-slate-400">Ongkir restok, Motif, Gaji, dll</p>
         </div>
 
         {/* Card 4: Profit Bersih (Net Profit) */}
@@ -310,7 +669,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
           summary.netProfit >= 0 ? 'bg-slate-900 text-white border-slate-800' : 'bg-rose-900 text-white border-rose-800'
         }`}>
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-rose-300 uppercase tracking-wider">Laba Bersih Bulan Ini</p>
+            <p className="text-xs font-semibold text-rose-300 uppercase tracking-wider">Laba Bersih ({selectedPeriodLabel})</p>
             <div className="w-8 h-8 rounded-lg bg-white/10 text-white flex items-center justify-center">
               <TrendingUp className="w-4 h-4" />
             </div>
@@ -520,6 +879,14 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
           </div>
         </div>
       )}
+
+      {/* Printable / Export PDF Financial Report Modal */}
+      <FinanceReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        summary={summary}
+        selectedPeriodLabel={selectedPeriodLabel}
+      />
     </div>
   );
 }

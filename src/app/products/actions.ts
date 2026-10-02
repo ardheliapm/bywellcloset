@@ -237,3 +237,34 @@ export async function toggleProductStatus(id: string, currentStatus: boolean) {
     return { success: false, error: 'Gagal mengubah status produk' };
   }
 }
+
+export async function deleteProduct(id: string) {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id },
+    });
+
+    if (!product) {
+      return { success: false, error: 'Produk tidak ditemukan' };
+    }
+
+    if (product.reservedStock > 0) {
+      return {
+        success: false,
+        error: `Produk tidak dapat dihapus karena masih ada ${product.reservedStock} pcs stok yang ditahan (HOLD) di order. Batalkan atau selesaikan order terkait terlebih dahulu.`,
+      };
+    }
+
+    await prisma.product.delete({
+      where: { id },
+    });
+
+    revalidatePath('/products');
+    revalidatePath('/finance');
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error deleting product:', error);
+    return { success: false, error: error.message || 'Gagal menghapus produk' };
+  }
+}

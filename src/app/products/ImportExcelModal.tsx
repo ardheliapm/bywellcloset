@@ -92,25 +92,66 @@ export default function ImportExcelModal({ isOpen, onClose }: ImportExcelModalPr
           return;
         }
 
-        // Flexibly map columns
+        // Flexibly map columns with priority predicates to prevent column collisions
         const mappedItems: BulkProductInput[] = rawJson.map((row: any) => {
-          // Normalize object keys
           const keys = Object.keys(row);
-          const findVal = (terms: string[]) => {
-            const matchedKey = keys.find((k) =>
-              terms.some((term) => k.toLowerCase().includes(term.toLowerCase()))
-            );
-            return matchedKey ? row[matchedKey] : '';
+
+          const getVal = (priorityPredicates: ((k: string) => boolean)[]): any => {
+            for (const predicate of priorityPredicates) {
+              const matchedKey = keys.find((k) => predicate(k.toLowerCase().trim()));
+              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                return row[matchedKey];
+              }
+            }
+            return '';
           };
 
-          const sku = String(findVal(['sku', 'kode'])).trim().toUpperCase();
-          const name = String(findVal(['nama', 'produk', 'name'])).trim();
-          const motif = String(findVal(['motif', 'koleksi'])).trim();
-          const color = String(findVal(['warna', 'color', 'varian'])).trim();
-          const costRaw = findVal(['modal', 'hpp', 'cost']);
-          const priceRaw = findVal(['harga jual', 'harga ecer', 'price', 'harga']);
-          const wholesaleRaw = findVal(['grosir', 'wholesale']);
-          const stockRaw = findVal(['stok', 'stock', 'fisik']);
+          const sku = String(
+            getVal([
+              (k) => k.includes('sku') || k.includes('kode sku'),
+              (k) => k.includes('kode') && !k.includes('nama'),
+            ])
+          ).trim().toUpperCase();
+
+          const name = String(
+            getVal([
+              (k) => k.includes('nama produk') || k.includes('product name'),
+              (k) => k.includes('nama') && !k.includes('sku') && !k.includes('motif') && !k.includes('warna'),
+              (k) => (k.includes('produk') || k.includes('barang') || k.includes('item')) && !k.includes('sku') && !k.includes('kode'),
+            ])
+          ).trim();
+
+          const motif = String(
+            getVal([
+              (k) => k.includes('motif'),
+              (k) => k.includes('koleksi') || k.includes('corak') || k.includes('pattern'),
+            ])
+          ).trim();
+
+          const color = String(
+            getVal([
+              (k) => k.includes('warna'),
+              (k) => k.includes('color') || k.includes('varian') || k.includes('variant'),
+            ])
+          ).trim();
+
+          const costRaw = getVal([
+            (k) => k.includes('modal') || k.includes('hpp') || k.includes('cost') || k.includes('beli'),
+          ]);
+
+          const priceRaw = getVal([
+            (k) => (k.includes('jual') || k.includes('ecer') || k.includes('selling') || k.includes('retail')) && !k.includes('modal') && !k.includes('hpp'),
+            (k) => (k.includes('price') || k.includes('harga')) && !k.includes('modal') && !k.includes('hpp') && !k.includes('cost') && !k.includes('beli') && !k.includes('grosir'),
+          ]);
+
+          const wholesaleRaw = getVal([
+            (k) => k.includes('grosir') || k.includes('wholesale') || k.includes('reseller'),
+          ]);
+
+          const stockRaw = getVal([
+            (k) => k.includes('stok fisik') || k.includes('stok awal') || k.includes('physical stock') || k.includes('initial stock'),
+            (k) => k.includes('stok') || k.includes('stock') || k.includes('qty') || k.includes('jumlah') || k.includes('fisik'),
+          ]);
 
           const costPrice = Math.max(0, parseInt(String(costRaw).replace(/[^0-9]/g, ''), 10) || 0);
           const sellingPrice = Math.max(0, parseInt(String(priceRaw).replace(/[^0-9]/g, ''), 10) || 0);
@@ -324,6 +365,7 @@ export default function ImportExcelModal({ isOpen, onClose }: ImportExcelModalPr
                       <th className="py-2.5 px-3">Nama Produk</th>
                       <th className="py-2.5 px-3">Motif</th>
                       <th className="py-2.5 px-3">Warna</th>
+                      <th className="py-2.5 px-3 text-right">Harga Modal (HPP)</th>
                       <th className="py-2.5 px-3 text-right">Harga Jual</th>
                       <th className="py-2.5 px-3 text-center">Stok Awal</th>
                     </tr>
@@ -336,7 +378,10 @@ export default function ImportExcelModal({ isOpen, onClose }: ImportExcelModalPr
                         <td className="py-2 px-3 font-medium text-slate-800">{item.name || '-'}</td>
                         <td className="py-2 px-3 text-slate-500">{item.motif || '-'}</td>
                         <td className="py-2 px-3 text-slate-500">{item.color || '-'}</td>
-                        <td className="py-2 px-3 text-right font-medium">
+                        <td className="py-2 px-3 text-right text-slate-500 font-medium">
+                          Rp {(item.costPrice || 0).toLocaleString('id-ID')}
+                        </td>
+                        <td className="py-2 px-3 text-right font-semibold text-slate-900">
                           Rp {item.sellingPrice.toLocaleString('id-ID')}
                         </td>
                         <td className="py-2 px-3 text-center font-bold text-slate-800">{item.physicalStock}</td>

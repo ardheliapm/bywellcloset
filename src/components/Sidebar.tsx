@@ -13,12 +13,11 @@ import {
   Menu,
   X,
   Sparkles,
-  Box,
   PieChart,
   Wallet,
-  LogOut,
+  Lock,
 } from 'lucide-react';
-import { logoutUser } from '@/app/login/actions';
+import { lockApp } from '@/app/pin/actions';
 
 const navItems = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -26,7 +25,6 @@ const navItems = [
   { name: 'Stok Masuk', href: '/stock-in', icon: ArrowDownToLine },
   { name: 'Paste Order', href: '/paste-order', icon: ClipboardPaste },
   { name: 'Daftar Order', href: '/orders', icon: ShoppingBag },
-  { name: 'Kemasan Ziplock', href: '/packaging', icon: Box },
   { name: 'Performa Motif', href: '/motif-analysis', icon: PieChart },
   { name: 'Keuangan & Profit', href: '/finance', icon: Wallet },
   { name: 'Riwayat Stok', href: '/stock-history', icon: History },
@@ -36,7 +34,7 @@ export default function Sidebar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  if (pathname === '/login') return null;
+  if (pathname === '/pin' || pathname === '/login') return null;
 
   return (
     <>
@@ -81,7 +79,7 @@ export default function Sidebar() {
                 Bywell Closet
               </h1>
               <p className="text-xs text-rose-400 font-medium mt-1 flex items-center gap-1">
-                <Sparkles className="w-3 h-3" /> Inventory MVP
+                <Sparkles className="w-3 h-3" /> Inventory App
               </p>
             </div>
           </Link>
@@ -114,20 +112,20 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* Footer Info & Logout */}
+        {/* Footer Info & Quick Lock */}
         <div className="p-4 border-t border-slate-800/80 space-y-2">
           <button
             type="button"
-            onClick={() => logoutUser()}
+            onClick={() => lockApp()}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-600/20 text-slate-300 hover:text-rose-400 border border-slate-700/60 font-semibold text-xs transition-colors"
           >
-            <LogOut className="w-4 h-4" /> Keluar (Logout)
+            <Lock className="w-4 h-4" /> Kunci Layar (PIN)
           </button>
           <div className="bg-slate-800/50 rounded-xl p-2.5 border border-slate-800 flex items-center justify-between text-xs text-slate-400">
             <div>
               <p className="font-medium text-slate-300">Status Sistem</p>
               <p className="text-emerald-400 flex items-center gap-1 mt-0.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Terkunci & Aman
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> PIN Aktif & Aman
               </p>
             </div>
             <span className="px-2 py-1 rounded bg-slate-700 text-slate-300 font-mono text-[10px]">
