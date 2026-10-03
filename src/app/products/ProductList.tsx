@@ -1,11 +1,13 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
-import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Download, Upload, FileSpreadsheet, Trash2 } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Download, Upload, FileSpreadsheet, Trash2, Layers } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import AddProductModal from './AddProductModal';
 import ImportExcelModal from './ImportExcelModal';
 import ResellerPricelistModal from './ResellerPricelistModal';
+import ManageProductTypesModal from './ManageProductTypesModal';
+import { getStoredProductTypes, ProductMasterType, PRODUCT_TYPES_UPDATED_EVENT } from '@/lib/productTypes';
 import { ProductItem, toggleProductStatus, deleteProduct } from './actions';
 
 interface ProductListProps {
@@ -19,6 +21,8 @@ export default function ProductList({ products }: ProductListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isPricelistModalOpen, setIsPricelistModalOpen] = useState(false);
+  const [isManageTypesOpen, setIsManageTypesOpen] = useState(false);
+  const [masterTypes, setMasterTypes] = useState<ProductMasterType[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
   const [nameFilter, setNameFilter] = useState<string>('ALL');
@@ -28,6 +32,17 @@ export default function ProductList({ products }: ProductListProps) {
   const [productToDelete, setProductToDelete] = useState<ProductItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const loadTypes = () => {
+    setMasterTypes(getStoredProductTypes());
+  };
+
+  useEffect(() => {
+    loadTypes();
+    const handleUpdate = () => loadTypes();
+    window.addEventListener(PRODUCT_TYPES_UPDATED_EVENT, handleUpdate);
+    return () => window.removeEventListener(PRODUCT_TYPES_UPDATED_EVENT, handleUpdate);
+  }, []);
 
   // Formatting Rupiah
   const formatRupiah = (val: number) => {
@@ -40,9 +55,10 @@ export default function ProductList({ products }: ProductListProps) {
 
   // Ambil daftar unik Nama Produk secara dinamis untuk pilihan dropdown filter
   const uniqueNames = useMemo(() => {
-    const names = products.map((p) => p.name);
-    return Array.from(new Set(names)).sort();
-  }, [products]);
+    const fromProducts = products.map((p) => p.name);
+    const fromMaster = masterTypes.map((t) => t.name);
+    return Array.from(new Set([...fromMaster, ...fromProducts])).filter(Boolean).sort();
+  }, [products, masterTypes]);
 
   // Hitung jumlah produk stok menipis (<= 5) dan habis (= 0)
   const lowStockCount = useMemo(() => {
@@ -173,6 +189,14 @@ export default function ProductList({ products }: ProductListProps) {
 
         {/* Header Action Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsManageTypesOpen(true)}
+            className="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-sm transition-colors flex items-center gap-2 shadow-xs"
+          >
+            <Layers className="w-4 h-4 text-rose-600" /> Master Nama Produk
+          </button>
+
           <button
             type="button"
             onClick={() => setIsPricelistModalOpen(true)}
@@ -567,6 +591,13 @@ export default function ProductList({ products }: ProductListProps) {
 
       {/* Reseller Pricelist Modal */}
       <ResellerPricelistModal isOpen={isPricelistModalOpen} onClose={() => setIsPricelistModalOpen(false)} />
+
+      {/* Master Data Nama Produk Modal */}
+      <ManageProductTypesModal
+        isOpen={isManageTypesOpen}
+        onClose={() => setIsManageTypesOpen(false)}
+        onTypesUpdated={loadTypes}
+      />
 
       {/* Custom Styled Delete Confirmation Modal */}
       {productToDelete && (

@@ -89,7 +89,7 @@ export default function ResellerPricelistModal({ isOpen, onClose }: ResellerPric
             </div>
             <div>
               <h2 className="text-lg font-bold">Pengaturan Pricelist Reseller</h2>
-              <p className="text-slate-400 text-xs">Kelola tabel harga grosir bertingkat (Bebas Mix Motif)</p>
+              <p className="text-slate-400 text-xs">Kelola tabel harga grosir bertingkat untuk BABY TRYSPAN (Bebas Mix Motif)</p>
             </div>
           </div>
           <button
@@ -112,7 +112,7 @@ export default function ResellerPricelistModal({ isOpen, onClose }: ResellerPric
         {/* Body: Tiers Table */}
         <div className="p-6 overflow-y-auto space-y-3">
           <p className="text-xs text-slate-500">
-            Ubah nominal harga pada kolom di bawah ini. Perubahan harga akan <strong>otomatis berlaku</strong> untuk semua penempelan pesanan WhatsApp baru.
+            Tabel harga ini khusus berlaku untuk produk <strong>BABY TRYSPAN</strong> (atau yang diaktifkan di Master Data Nama Produk). Produk <strong>PARIS JAPAN</strong> akan tetap menggunakan harga normal/reguler.
           </p>
 
           <div className="border border-slate-200 rounded-xl overflow-hidden">

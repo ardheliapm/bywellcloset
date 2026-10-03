@@ -12,10 +12,19 @@ import {
   FileText, 
   Loader2, 
   Tag,
-  Gift
+  Gift,
+  Layers,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react';
 import { ProductMatchInfo, createOrder } from './actions';
 import InvoiceModal from '../orders/InvoiceModal';
+import {
+  ProductMasterType,
+  getStoredProductTypes,
+  checkIsResellerEligible,
+  PRODUCT_TYPES_UPDATED_EVENT,
+} from '@/lib/productTypes';
 
 interface ParsedItem {
   id: string;
@@ -29,6 +38,7 @@ interface ParsedItem {
   quantity: number;
   availableStock: number;
   isMatched: boolean;
+  isResellerEligible: boolean;
 }
 
 interface PasteOrderClientProps {
@@ -49,6 +59,7 @@ BW76(3)`
   const [hasParsed, setHasParsed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [productTypes, setProductTypes] = useState<ProductMasterType[]>([]);
 
   // Success state
   const [successOrder, setSuccessOrder] = useState<{
@@ -140,12 +151,24 @@ BW76(3)`
     }
   };
 
+  const loadProductTypes = () => {
+    setProductTypes(getStoredProductTypes());
+  };
+
   useEffect(() => {
     loadCustomTiers();
+    loadProductTypes();
 
-    const handleUpdate = () => loadCustomTiers();
-    window.addEventListener('bywell_pricelist_updated', handleUpdate);
-    return () => window.removeEventListener('bywell_pricelist_updated', handleUpdate);
+    const handleTierUpdate = () => loadCustomTiers();
+    const handleTypesUpdate = () => loadProductTypes();
+
+    window.addEventListener('bywell_pricelist_updated', handleTierUpdate);
+    window.addEventListener(PRODUCT_TYPES_UPDATED_EVENT, handleTypesUpdate);
+
+    return () => {
+      window.removeEventListener('bywell_pricelist_updated', handleTierUpdate);
+      window.removeEventListener(PRODUCT_TYPES_UPDATED_EVENT, handleTypesUpdate);
+    };
   }, []);
 
   const getResellerTier = (totalQty: number) => {
@@ -171,6 +194,41 @@ BW76(3)`
     if (totalQty < 501) return { nextQty: 501, nextPrice: 27500, diffQty: 501 - totalQty };
     if (totalQty < 1000) return { nextQty: 1000, nextPrice: 26000, diffQty: 1000 - totalQty };
     return null;
+  };
+
+  // Sync pricing: Hanya produk BABY TRYSPAN (atau yang eligible reseller) yang dikenakan tier reseller price!
+  const applyResellerTierPricing = (items: ParsedItem[], currentTypes = productTypes) => {
+    const typesList = currentTypes.length > 0 ? currentTypes : getStoredProductTypes();
+
+    // 1. Hitung total kuantiti KHUSUS produk yang eligible reseller (seperti BABY TRYSPAN)
+    const eligibleQty = items.reduce((acc, it) => {
+      const isEligible = checkIsResellerEligible(it.productName, typesList);
+      return isEligible ? acc + it.quantity : acc;
+    }, 0);
+
+    const currentTier = getResellerTier(eligibleQty);
+
+    return items.map((item) => {
+      const isEligible = checkIsResellerEligible(item.productName, typesList);
+      if (isEligible) {
+        // BABY TRYSPAN: Dapatkan harga reseller sesuai tier kuantiti BABY TRYSPAN
+        return {
+          ...item,
+          isResellerEligible: true,
+          wholesalePrice: currentTier.price,
+          price: currentTier.price,
+        };
+      } else {
+        // PARIS JAPAN / NON-RESELLER: Tetap menggunakan harga normal / sellingPrice produk
+        const normalPrice = item.sellingPrice || 42000;
+        return {
+          ...item,
+          isResellerEligible: false,
+          wholesalePrice: normalPrice,
+          price: normalPrice,
+        };
+      }
+    });
   };
 
   // Parser Algorithm
@@ -207,8 +265,6 @@ BW76(3)`
       quantity: number;
     }>();
 
-    let tempTotalQty = 0;
-
     itemLines.forEach((line) => {
       let itemName = line;
       let qty = 1;
@@ -236,8 +292,6 @@ BW76(3)`
       const name = matched ? matched.name : itemName;
       const key = matched ? matched.id : sku;
 
-      tempTotalQty += qty;
-
       if (rawResultsMap.has(key)) {
         const exist = rawResultsMap.get(key)!;
         exist.quantity += qty;
@@ -254,15 +308,13 @@ BW76(3)`
     });
 
     const rawResults = Array.from(rawResultsMap.values());
+    const currentTypes = productTypes.length > 0 ? productTypes : getStoredProductTypes();
 
-    const activeTier = getResellerTier(tempTotalQty);
-    const tierUnitPrice = activeTier.price;
+    const rawParsed: ParsedItem[] = rawResults.map((r, idx) => {
+      const isEligible = checkIsResellerEligible(r.productName, currentTypes);
 
-    const results: ParsedItem[] = rawResults.map((r, idx) => {
       if (r.product) {
         const sellingPrice = r.product.sellingPrice || 42000;
-        const wholesalePrice = tierUnitPrice;
-
         return {
           id: `item-${idx}-${Date.now()}`,
           rawText: r.rawText,
@@ -270,11 +322,12 @@ BW76(3)`
           productSku: r.product.sku,
           productName: r.product.name,
           sellingPrice,
-          wholesalePrice,
-          price: tierUnitPrice,
+          wholesalePrice: sellingPrice,
+          price: sellingPrice,
           quantity: r.quantity,
           availableStock: r.product.availableStock,
           isMatched: true,
+          isResellerEligible: isEligible,
         };
       } else {
         return {
@@ -284,16 +337,18 @@ BW76(3)`
           productSku: r.productSku,
           productName: r.productName,
           sellingPrice: 42000,
-          wholesalePrice: tierUnitPrice,
-          price: tierUnitPrice,
+          wholesalePrice: 42000,
+          price: 42000,
           quantity: r.quantity,
           availableStock: 0,
           isMatched: false,
+          isResellerEligible: isEligible,
         };
       }
     });
 
-    setParsedItems(results);
+    const finalized = applyResellerTierPricing(rawParsed, currentTypes);
+    setParsedItems(finalized);
     setHasParsed(true);
   };
 
@@ -309,37 +364,36 @@ BW76(3)`
     return parsedItems.reduce((acc, item) => acc + item.quantity, 0);
   }, [parsedItems]);
 
+  // Hitung jumlah pcs khusus item yang berlaku diskon reseller (BABY TRYSPAN)
+  const resellerEligibleQty = useMemo(() => {
+    return parsedItems.reduce((acc, item) => {
+      const isEligible = checkIsResellerEligible(item.productName, productTypes);
+      return isEligible ? acc + item.quantity : acc;
+    }, 0);
+  }, [parsedItems, productTypes]);
+
+  // Hitung jumlah pcs non-reseller (PARIS JAPAN, dll)
+  const nonResellerQty = useMemo(() => {
+    return totalQty - resellerEligibleQty;
+  }, [totalQty, resellerEligibleQty]);
+
   const activeResellerTier = useMemo(() => {
-    return getResellerTier(totalQty);
-  }, [totalQty]);
+    return getResellerTier(resellerEligibleQty);
+  }, [resellerEligibleQty]);
 
   const nextResellerTier = useMemo(() => {
-    return getNextResellerTier(totalQty);
-  }, [totalQty]);
+    return getNextResellerTier(resellerEligibleQty);
+  }, [resellerEligibleQty]);
 
   const totalAmount = useMemo(() => {
     return parsedItems.reduce((acc, item) => acc + item.price * item.quantity, 0);
   }, [parsedItems]);
 
   const baseRetailTotal = useMemo(() => {
-    return parsedItems.reduce((acc, item) => acc + 42000 * item.quantity, 0);
+    return parsedItems.reduce((acc, item) => acc + item.sellingPrice * item.quantity, 0);
   }, [parsedItems]);
 
   const totalSavings = Math.max(0, baseRetailTotal - totalAmount);
-
-  // Sync pricing when items quantity changes across reseller tier thresholds
-  const applyResellerTierPricing = (items: ParsedItem[]) => {
-    const currentTotal = items.reduce((acc, it) => acc + it.quantity, 0);
-    const currentTier = getResellerTier(currentTotal);
-
-    return items.map((item) => {
-      return {
-        ...item,
-        wholesalePrice: currentTier.price,
-        price: currentTier.price,
-      };
-    });
-  };
 
   // Handle select product from dropdown
   const handleSelectProduct = (itemId: string, selectedProductId: string) => {
@@ -347,6 +401,7 @@ BW76(3)`
     if (!selected) return;
 
     setParsedItems((prev) => {
+      const isEligible = checkIsResellerEligible(selected.name, productTypes);
       const updated = prev.map((item) => {
         if (item.id === itemId) {
           return {
@@ -357,6 +412,7 @@ BW76(3)`
             sellingPrice: selected.sellingPrice || 42000,
             availableStock: selected.availableStock,
             isMatched: true,
+            isResellerEligible: isEligible,
           };
         }
         return item;
@@ -389,21 +445,22 @@ BW76(3)`
   // Add new item manual
   const handleAddNewItem = () => {
     const firstProd = products[0];
-    const newTotal = totalQty + 1;
-    const tierPrice = getResellerTier(newTotal).price;
+    const isEligible = firstProd ? checkIsResellerEligible(firstProd.name, productTypes) : true;
+    const initialPrice = firstProd ? firstProd.sellingPrice || 42000 : 42000;
 
     const newItem: ParsedItem = {
       id: `manual-${Date.now()}`,
-      rawText: 'Item Manual',
+      rawText: firstProd ? firstProd.name : 'Produk Baru',
       productId: firstProd ? firstProd.id : undefined,
       productSku: firstProd ? firstProd.sku : 'PROD-NEW',
-      productName: firstProd ? firstProd.name : 'Produk Baru',
-      sellingPrice: firstProd ? (firstProd.sellingPrice || 42000) : 42000,
-      wholesalePrice: tierPrice,
-      price: tierPrice,
+      productName: firstProd ? firstProd.name : 'BABY TRYSPAN',
+      sellingPrice: initialPrice,
+      wholesalePrice: initialPrice,
+      price: initialPrice,
       quantity: 1,
       availableStock: firstProd ? firstProd.availableStock : 0,
       isMatched: Boolean(firstProd),
+      isResellerEligible: isEligible,
     };
 
     setParsedItems(applyResellerTierPricing([...parsedItems, newItem]));
@@ -491,7 +548,7 @@ BW76(3)`
           Paste Order WhatsApp
         </h1>
         <p className="text-slate-500 text-sm mt-0.5">
-          Tempel teks salinan pesanan dari chat WhatsApp, sistem akan mengekstrak produk, menerapkan harga grosir, dan menahan stok.
+          Tempel teks salinan pesanan dari chat WhatsApp, sistem otomatis membedakan produk <strong>BABY TRYSPAN</strong> (Diskon Reseller) dan <strong>PARIS JAPAN</strong> (Harga Normal).
         </p>
       </div>
 
@@ -556,9 +613,14 @@ BW76(3)`
             />
 
             <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs space-y-2">
-              <p className="font-bold text-slate-800 flex items-center gap-1.5 border-b border-slate-200 pb-1.5">
-                <Tag className="w-4 h-4 text-emerald-600" /> Tabel Pricelist Reseller (Bebas Mix Motif)
-              </p>
+              <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
+                <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <Tag className="w-4 h-4 text-emerald-600" /> Pricelist Reseller BABY TRYSPAN
+                </p>
+                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                  Mix Motif Aktif
+                </span>
+              </div>
               <div className="space-y-1 font-mono text-[11px] text-slate-600">
                 {resellerTiers.map((t, i) => (
                   <div key={i} className={`flex justify-between py-0.5 border-b border-slate-100 ${i === 8 ? 'font-bold text-emerald-700 bg-emerald-50 px-1 rounded-sm' : ''}`}>
@@ -566,8 +628,8 @@ BW76(3)`
                   </div>
                 ))}
               </div>
-              <p className="text-[10px] text-slate-400 italic pt-1">
-                *Tingkat harga ditentukan otomatis dari total kuantitas order (campur motif).
+              <p className="text-[10px] text-slate-500 italic pt-1">
+                *Hanya produk <strong>BABY TRYSPAN</strong> yang dihitung kuantitinya untuk tier harga reseller. Produk <strong>PARIS JAPAN</strong> tetap dihitung harga normalnya.
               </p>
             </div>
 
@@ -589,7 +651,7 @@ BW76(3)`
               <div>
                 <h3 className="text-lg font-bold text-slate-800">Preview & Validasi Pesanan</h3>
                 <p className="text-slate-500 text-xs mt-0.5">
-                  Periksa kesesuaian produk, status tier reseller, ketersediaan stok, dan ubah jumlah jika diperlukan.
+                  Periksa kesesuaian produk, status tier reseller BABY TRYSPAN, dan ketersediaan stok.
                 </p>
               </div>
 
@@ -605,24 +667,35 @@ BW76(3)`
                 <div className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-emerald-500/10 border border-emerald-300 text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs">
                   <div className="flex items-center gap-2.5">
                     <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex flex-col items-center justify-center font-bold shrink-0 shadow-2xs">
-                      <span className="text-xs leading-none">{totalQty}</span>
+                      <span className="text-xs leading-none">{resellerEligibleQty}</span>
                       <span className="text-[9px] uppercase tracking-tighter">PCS</span>
                     </div>
                     <div>
                       <p className="text-xs font-bold flex items-center gap-1.5 text-emerald-900">
-                        <Tag className="w-4 h-4 text-emerald-600" /> HARGA RESELLER: {activeResellerTier.label}
+                        <Tag className="w-4 h-4 text-emerald-600" /> HARGA RESELLER (BABY TRYSPAN): {activeResellerTier.label}
                       </p>
                       <p className="text-[11px] text-emerald-700">
-                        Total pesanan <strong>{totalQty} pcs</strong> (bebas mix motif) $\rightarrow$ Harga Satuan Otomatis <strong>{formatRupiah(activeResellerTier.price)}</strong> / pcs.
+                        Total BABY TRYSPAN: <strong>{resellerEligibleQty} pcs</strong> $\rightarrow$ Harga Satuan <strong>{formatRupiah(activeResellerTier.price)}</strong> / pcs.
+                        {nonResellerQty > 0 && (
+                          <span className="ml-1 text-slate-600 font-medium">
+                            (Ada {nonResellerQty} pcs produk Non-Reseller / PARIS JAPAN dengan harga normal).
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
                   {totalSavings > 0 && (
                     <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold shrink-0 self-start sm:self-center shadow-2xs">
-                      Hemat Total {formatRupiah(totalSavings)}
+                      Hemat Reseller {formatRupiah(totalSavings)}
                     </span>
                   )}
                 </div>
+
+                {nextResellerTier && resellerEligibleQty > 0 && (
+                  <p className="text-[11px] text-slate-500 italic px-1">
+                    💡 Tambah <strong>{nextResellerTier.diffQty} pcs BABY TRYSPAN</strong> lagi untuk naik ke harga tier berikutnya ({formatRupiah(nextResellerTier.nextPrice)} / pcs).
+                  </p>
+                )}
               </div>
             )}
 
@@ -667,7 +740,7 @@ BW76(3)`
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Rincian Produk Dipesan ({parsedItems.length} Item)
+                  Rincian Produk Dipesan ({parsedItems.length} Item • {totalQty} PCS)
                 </span>
                 <button
                   type="button"
@@ -688,6 +761,7 @@ BW76(3)`
                     <thead className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase">
                       <tr>
                         <th className="py-3 px-3">Produk & SKU</th>
+                        <th className="py-3 px-3 text-center">Tipe Diskon</th>
                         <th className="py-3 px-3 text-center">Stok Siap</th>
                         <th className="py-3 px-3 text-right">Harga Satuan (Rp)</th>
                         <th className="py-3 px-3 text-center">Jumlah</th>
@@ -698,7 +772,7 @@ BW76(3)`
                     <tbody className="divide-y divide-slate-100">
                       {parsedItems.map((item) => {
                         const isStockLow = item.quantity > item.availableStock;
-                        const isDiscounted = item.price < 42000;
+                        const isReseller = item.isResellerEligible;
 
                         return (
                           <tr key={item.id} className="hover:bg-slate-50/70">
@@ -714,10 +788,7 @@ BW76(3)`
                                   </div>
                                   <div className="flex items-center gap-2 text-[11px] mt-0.5">
                                     <span className="text-slate-400">
-                                      Ecer: {formatRupiah(42000)}
-                                    </span>
-                                    <span className="text-emerald-600 font-bold">
-                                      Reseller: {formatRupiah(activeResellerTier.price)}
+                                      Harga Ecer: {formatRupiah(item.sellingPrice)}
                                     </span>
                                   </div>
                                 </div>
@@ -736,11 +807,24 @@ BW76(3)`
                                     </option>
                                     {products.map((p) => (
                                       <option key={p.id} value={p.id}>
-                                        {p.sku} - {p.name} (Stok: {p.availableStock}) - Ecer: Rp {p.sellingPrice.toLocaleString('id-ID')} | Grosir: Rp {p.wholesalePrice.toLocaleString('id-ID')}
+                                        {p.sku} - {p.name} {p.motif ? `(${p.motif})` : ''} - Ecer: Rp {p.sellingPrice.toLocaleString('id-ID')} | Stok: {p.availableStock}
                                       </option>
                                     ))}
                                   </select>
                                 </div>
+                              )}
+                            </td>
+
+                            {/* Reseller vs Non-Reseller Status Badge */}
+                            <td className="py-3 px-3 text-center">
+                              {isReseller ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
+                                  <Tag className="w-3 h-3 text-rose-600" /> Reseller Tier
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                  📦 Harga Normal
+                                </span>
                               )}
                             </td>
 
@@ -765,7 +849,7 @@ BW76(3)`
                             {/* Harga Satuan */}
                             <td className="py-3 px-3 text-right">
                               <div className="flex items-center justify-end gap-1.5">
-                                {isDiscounted && (
+                                {isReseller && item.price < item.sellingPrice && (
                                   <span className="line-through text-slate-400 text-[10px]">
                                     {formatRupiah(item.sellingPrice)}
                                   </span>
@@ -776,17 +860,12 @@ BW76(3)`
                                   value={item.price}
                                   onChange={(e) => handlePriceChange(item.id, parseInt(e.target.value, 10) || 0)}
                                   className={`w-24 text-right px-2 py-1 rounded-lg border text-xs font-semibold ${
-                                    isDiscounted
+                                    isReseller && item.price < item.sellingPrice
                                       ? 'border-emerald-300 bg-emerald-50/60 text-emerald-800'
                                       : 'border-slate-200'
                                   }`}
                                 />
                               </div>
-                              {isDiscounted && (
-                                <span className="text-[10px] text-emerald-600 font-bold block mt-0.5">
-                                  🏷️ Harga Reseller
-                                </span>
-                              )}
                             </td>
 
                             {/* Qty with +/- buttons */}
@@ -839,15 +918,14 @@ BW76(3)`
             {/* Total Summary Footer */}
             {parsedItems.length > 0 && (
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="text-xs text-slate-600 space-y-0.5">
+                <div className="text-xs text-slate-600 space-y-1">
                   <p>
-                    Total Item: <strong>{parsedItems.length} SKU</strong> | Total Kuantitas:{' '}
+                    Total Item: <strong>{parsedItems.length} SKU</strong> | Total Keseluruhan:{' '}
                     <strong>{totalQty} pcs</strong>
-                    {totalQty >= 6 && (
-                      <span className="ml-2 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-bold text-[10px]">
-                        {activeResellerTier.label}
-                      </span>
-                    )}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    • <strong>BABY TRYSPAN (Reseller):</strong> {resellerEligibleQty} pcs (@ {formatRupiah(activeResellerTier.price)})
+                    {nonResellerQty > 0 && ` • PARIS JAPAN / Normal: ${nonResellerQty} pcs`}
                   </p>
                 </div>
 

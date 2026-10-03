@@ -266,7 +266,11 @@ export interface AddItemInput {
   quantity: number;
 }
 
-export async function addItemsToOrder(orderId: string, items: AddItemInput[], newUnitPrice?: number) {
+export async function addItemsToOrder(
+  orderId: string,
+  items: AddItemInput[],
+  newResellerUnitPrice?: number
+) {
   try {
     if (!items || items.length === 0) {
       return { success: false, error: 'Minimal 1 produk harus ditambahkan' };
@@ -282,13 +286,11 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[], ne
     }
 
     if (order.status !== 'HOLD') {
-      return { success: false, error: `Hanya order berstatus HOLD yang bisa ditambah item. Status saat ini: ${order.status}` };
+      return {
+        success: false,
+        error: `Hanya order berstatus HOLD yang bisa ditambah item. Status saat ini: ${order.status}`,
+      };
     }
-
-    // Determine unit price across all items if tier price is used
-    const effectiveUnitPrice = newUnitPrice && newUnitPrice > 0 
-      ? newUnitPrice 
-      : (items[0]?.price && items[0].price > 0 ? items[0].price : null);
 
     // Merge incoming new items by SKU / productId first
     const incomingMap = new Map<string, AddItemInput>();
@@ -296,7 +298,7 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[], ne
       const sku = it.productSku.trim().toUpperCase();
       const key = it.productId || sku;
       const q = Math.max(1, Number(it.quantity) || 1);
-      const p = effectiveUnitPrice || Math.max(0, Number(it.price) || 0);
+      const p = Math.max(0, Number(it.price) || 0);
 
       if (incomingMap.has(key)) {
         const exist = incomingMap.get(key)!;
@@ -330,7 +332,7 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[], ne
         const sku = item.productSku.trim().toUpperCase();
         const key = item.productId || sku;
         const q = Math.max(1, Number(item.quantity) || 1);
-        const p = effectiveUnitPrice || Math.max(0, Number(item.price) || 0);
+        const p = Math.max(0, Number(item.price) || 0);
 
         const existingItem = existingItemsMap.get(key);
 
@@ -338,7 +340,7 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[], ne
           // Merge with existing item
           processedExistingIds.add(existingItem.id);
           const updatedQty = existingItem.quantity + q;
-          const updatedPrice = effectiveUnitPrice || p;
+          const updatedPrice = p > 0 ? p : existingItem.price;
 
           await tx.orderItem.update({
             where: { id: existingItem.id },
@@ -374,17 +376,23 @@ export async function addItemsToOrder(orderId: string, items: AddItemInput[], ne
         }
       }
 
-      // 2. Update remaining existing items that weren't merged, to reflect new effectiveUnitPrice if tier changed
-      if (effectiveUnitPrice) {
+      // 2. Update remaining existing items: if newResellerUnitPrice provided, update only BABY TRYSPAN / reseller eligible items
+      if (newResellerUnitPrice && newResellerUnitPrice > 0) {
         for (const existingItem of order.items) {
           if (!processedExistingIds.has(existingItem.id)) {
-            await tx.orderItem.update({
-              where: { id: existingItem.id },
-              data: {
-                price: effectiveUnitPrice,
-                subtotal: existingItem.quantity * effectiveUnitPrice,
-              },
-            });
+            const isBabyTryspan =
+              existingItem.productName.toUpperCase().includes('BABY TRYSPAN') ||
+              existingItem.productName.toUpperCase().includes('TRYSPAN');
+
+            if (isBabyTryspan) {
+              await tx.orderItem.update({
+                where: { id: existingItem.id },
+                data: {
+                  price: newResellerUnitPrice,
+                  subtotal: existingItem.quantity * newResellerUnitPrice,
+                },
+              });
+            }
           }
         }
       }

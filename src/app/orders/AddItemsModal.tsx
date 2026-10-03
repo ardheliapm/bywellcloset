@@ -12,9 +12,16 @@ import {
   AlertTriangle,
   Sparkles,
   Search,
+  Tag,
 } from 'lucide-react';
 import { OrderRecord, addItemsToOrder, AddItemInput } from './actions';
 import { ProductMatchInfo, getActiveProductsForOrder } from '../paste-order/actions';
+import {
+  ProductMasterType,
+  getStoredProductTypes,
+  checkIsResellerEligible,
+  PRODUCT_TYPES_UPDATED_EVENT,
+} from '@/lib/productTypes';
 
 interface AddItemsModalProps {
   isOpen: boolean;
@@ -27,9 +34,11 @@ interface ParsedNewItem {
   productId?: string;
   productSku: string;
   productName: string;
+  sellingPrice: number;
   price: number;
   quantity: number;
   isMatched: boolean;
+  isResellerEligible: boolean;
 }
 
 type TabMode = 'paste' | 'manual';
@@ -41,6 +50,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [productTypes, setProductTypes] = useState<ProductMasterType[]>([]);
 
   // Paste mode state
   const [rawText, setRawText] = useState('');
@@ -51,10 +61,11 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
   const [manualItems, setManualItems] = useState<ParsedNewItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Load products on mount
+  // Load products & types on mount
   useEffect(() => {
     if (isOpen) {
       setLoadingProducts(true);
+      setProductTypes(getStoredProductTypes());
       getActiveProductsForOrder()
         .then((prods) => setProducts(prods))
         .finally(() => setLoadingProducts(false));
@@ -103,14 +114,20 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
     return tiers[0]?.price || 42000;
   };
 
-  // Calculate total qty including existing order items
-  const existingQty = order.items.reduce((acc, it) => acc + it.quantity, 0);
+  // Calculate existing order quantities
+  const existingTotalQty = order.items.reduce((acc, it) => acc + it.quantity, 0);
+  const existingResellerQty = order.items.reduce((acc, it) => {
+    return checkIsResellerEligible(it.productName, productTypes) ? acc + it.quantity : acc;
+  }, 0);
 
   const currentItems = activeTab === 'paste' ? parsedItems : manualItems;
-  const newQty = currentItems.reduce((acc, it) => acc + it.quantity, 0);
-  const combinedTotalQty = existingQty + newQty;
+  const newTotalQty = currentItems.reduce((acc, it) => acc + it.quantity, 0);
+  const newResellerQty = currentItems.reduce((acc, it) => {
+    return checkIsResellerEligible(it.productName, productTypes) ? acc + it.quantity : acc;
+  }, 0);
 
-  const unitPrice = getResellerPrice(combinedTotalQty);
+  const combinedResellerQty = existingResellerQty + newResellerQty;
+  const resellerTierUnitPrice = getResellerPrice(combinedResellerQty);
 
   // Find best match in catalog
   const findBestProductMatch = (query: string): ProductMatchInfo | null => {
@@ -138,6 +155,18 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
     return null;
   };
 
+  // Helper to re-apply prices to parsed or manual items
+  const syncItemPrices = (items: ParsedNewItem[], tierPrice: number) => {
+    return items.map((it) => {
+      const isEligible = checkIsResellerEligible(it.productName, productTypes);
+      return {
+        ...it,
+        isResellerEligible: isEligible,
+        price: isEligible ? tierPrice : (it.sellingPrice || 42000),
+      };
+    });
+  };
+
   // Parse pasted text
   const handleParse = () => {
     setError(null);
@@ -159,9 +188,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
     const resultMap = new Map<string, ParsedNewItem>();
 
     lines.forEach((line) => {
-      // Skip lines that look like customer names
       if (/^(kak|bu|pak|mas|mbak|sis|bro|nama)\s/i.test(line)) return;
-      // Skip phone numbers
       if (/^(\+?62|08)\d{8,13}$/.test(line.replace(/[\s\-]/g, ''))) return;
 
       let itemName = line;
@@ -179,8 +206,11 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
       const match = findBestProductMatch(itemName);
       const sku = match?.sku || itemName.toUpperCase();
+      const name = match?.name || itemName;
       const key = match?.id || sku;
       const parsedQty = Math.max(1, qty || 1);
+      const isEligible = checkIsResellerEligible(name, productTypes);
+      const sellingPrice = match?.sellingPrice || 42000;
 
       if (resultMap.has(key)) {
         const exist = resultMap.get(key)!;
@@ -190,10 +220,12 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
           id: crypto.randomUUID(),
           productId: match?.id,
           productSku: sku,
-          productName: match?.name || itemName,
-          price: unitPrice,
+          productName: name,
+          sellingPrice,
+          price: isEligible ? resellerTierUnitPrice : sellingPrice,
           quantity: parsedQty,
           isMatched: !!match,
+          isResellerEligible: isEligible,
         });
       }
     });
@@ -205,74 +237,93 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       return;
     }
 
-    setParsedItems(results);
+    // Re-sync with final tier
+    const tempResellerQty = results.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+    const finalSynced = syncItemPrices(results, finalTier);
+
+    setParsedItems(finalSynced);
     setHasParsed(true);
   };
 
   // Add manual item
   const handleAddManualItem = (product: ProductMatchInfo) => {
+    const isEligible = checkIsResellerEligible(product.name, productTypes);
+    const sellingPrice = product.sellingPrice || 42000;
+
     const existing = manualItems.find((m) => m.productId === product.id);
+    let updated: ParsedNewItem[];
+
     if (existing) {
-      setManualItems((prev) =>
-        prev.map((m) => m.productId === product.id ? { ...m, quantity: m.quantity + 1 } : m)
+      updated = manualItems.map((m) =>
+        m.productId === product.id ? { ...m, quantity: m.quantity + 1 } : m
       );
     } else {
-      setManualItems((prev) => [
-        ...prev,
+      updated = [
+        ...manualItems,
         {
           id: crypto.randomUUID(),
           productId: product.id,
           productSku: product.sku,
           productName: product.name,
-          price: unitPrice,
+          sellingPrice,
+          price: isEligible ? resellerTierUnitPrice : sellingPrice,
           quantity: 1,
           isMatched: true,
+          isResellerEligible: isEligible,
         },
-      ]);
+      ];
     }
+
+    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+    setManualItems(syncItemPrices(updated, finalTier));
     setSearchQuery('');
   };
 
   // Update qty for manual item
   const updateManualQty = (id: string, qty: number) => {
-    setManualItems((prev) => prev.map((m) => m.id === id ? { ...m, quantity: Math.max(1, qty) } : m));
+    const updated = manualItems.map((m) => (m.id === id ? { ...m, quantity: Math.max(1, qty) } : m));
+    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+    setManualItems(syncItemPrices(updated, finalTier));
   };
 
   // Remove item
   const removeItem = (id: string) => {
     if (activeTab === 'paste') {
-      setParsedItems((prev) => prev.filter((p) => p.id !== id));
+      const updated = parsedItems.filter((p) => p.id !== id);
+      const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+      const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+      setParsedItems(syncItemPrices(updated, finalTier));
     } else {
-      setManualItems((prev) => prev.filter((m) => m.id !== id));
+      const updated = manualItems.filter((m) => m.id !== id);
+      const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+      const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+      setManualItems(syncItemPrices(updated, finalTier));
     }
   };
 
   // Update qty for parsed item
   const updateParsedQty = (id: string, qty: number) => {
-    setParsedItems((prev) => prev.map((p) => p.id === id ? { ...p, quantity: Math.max(1, qty) } : p));
+    const updated = parsedItems.map((p) => (p.id === id ? { ...p, quantity: Math.max(1, qty) } : p));
+    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
+    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
+    setParsedItems(syncItemPrices(updated, finalTier));
   };
-
-  // Recalculate prices when combined total changes
-  useEffect(() => {
-    const price = getResellerPrice(combinedTotalQty);
-    if (activeTab === 'paste') {
-      setParsedItems((prev) => prev.map((p) => ({ ...p, price })));
-    } else {
-      setManualItems((prev) => prev.map((m) => ({ ...m, price })));
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [combinedTotalQty]);
 
   // Filtered products for manual search
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase();
-    return products.filter(
-      (p) =>
-        p.sku.toLowerCase().includes(q) ||
-        p.name.toLowerCase().includes(q) ||
-        (p.motif && p.motif.toLowerCase().includes(q))
-    ).slice(0, 8);
+    return products
+      .filter(
+        (p) =>
+          p.sku.toLowerCase().includes(q) ||
+          p.name.toLowerCase().includes(q) ||
+          (p.motif && p.motif.toLowerCase().includes(q))
+      )
+      .slice(0, 8);
   }, [products, searchQuery]);
 
   // Format Rupiah
@@ -298,7 +349,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       quantity: it.quantity,
     }));
 
-    const result = await addItemsToOrder(order.id, payload, unitPrice);
+    const result = await addItemsToOrder(order.id, payload, resellerTierUnitPrice);
 
     if (result.success) {
       setSuccessMsg(`Berhasil menambahkan ${items.length} item ke Order #${order.orderNumber}!`);
@@ -314,8 +365,8 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
   if (!isOpen) return null;
 
-  const newTotalOrderAmount = combinedTotalQty * unitPrice;
-  const differenceAmount = newTotalOrderAmount - order.totalAmount;
+  // Calculate new subtotal
+  const addedSubtotal = currentItems.reduce((acc, it) => acc + it.price * it.quantity, 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
@@ -328,7 +379,7 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
               Tambah Item ke Order #{order.orderNumber}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Customer: <strong>{order.customerName}</strong> • Item saat ini: {order.items.length} ({existingQty} pcs)
+              Customer: <strong>{order.customerName}</strong> • Item saat ini: {order.items.length} ({existingTotalQty} pcs)
             </p>
           </div>
           <button
@@ -378,240 +429,258 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
             {/* Content Area */}
             <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
-              {/* Error Message */}
+              {/* Reseller Tier Info Badge */}
+              <div className="p-3 bg-violet-50/70 border border-violet-200 rounded-xl text-xs space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-violet-900 flex items-center gap-1.5">
+                    <Tag className="w-4 h-4 text-violet-600" />
+                    Tier Reseller BABY TRYSPAN: {combinedResellerQty} pcs $\rightarrow$ {formatRupiah(resellerTierUnitPrice)} / pcs
+                  </span>
+                  <span className="text-[11px] text-violet-700">
+                    Total Order Nanti: {existingTotalQty + newTotalQty} pcs
+                  </span>
+                </div>
+                <p className="text-[11px] text-violet-600">
+                  *Item <strong>BABY TRYSPAN</strong> dikenakan harga tier reseller ({formatRupiah(resellerTierUnitPrice)}), sedangkan <strong>PARIS JAPAN</strong> tetap dengan harga normal.
+                </p>
+              </div>
+
               {error && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" />
+                  <span>{error}</span>
                 </div>
               )}
 
-              {/* === PASTE TAB === */}
+              {/* Paste Tab */}
               {activeTab === 'paste' && (
                 <div className="space-y-3">
-                  <div>
-                    <label className="text-xs font-bold text-slate-600 mb-1 block">
-                      Paste teks tambahan (tanpa nama customer):
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Tempel Teks Tambahan Pesanan:
                     </label>
                     <textarea
+                      rows={5}
                       value={rawText}
-                      onChange={(e) => { setRawText(e.target.value); setHasParsed(false); }}
-                      placeholder={`Contoh:\nBW90(5)\nBW91(3)\nblush sparky(2)`}
-                      rows={4}
-                      className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none resize-none font-mono bg-slate-50"
+                      onChange={(e) => setRawText(e.target.value)}
+                      placeholder={`Contoh:\nspark flower(2)\nPJ01(1)`}
+                      className="w-full p-3 rounded-xl border border-slate-200 font-mono text-xs focus:outline-hidden focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleParse}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-all flex items-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Ekstrak Item
+                  </button>
+
+                  {/* Parsed items table */}
+                  {parsedItems.length > 0 && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden mt-3">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600">
+                          <tr>
+                            <th className="p-2.5">Produk</th>
+                            <th className="p-2.5 text-center">Tipe</th>
+                            <th className="p-2.5 text-right">Harga</th>
+                            <th className="p-2.5 text-center">Qty</th>
+                            <th className="p-2.5 text-right">Subtotal</th>
+                            <th className="p-2.5 text-center">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {parsedItems.map((it) => (
+                            <tr key={it.id}>
+                              <td className="p-2.5">
+                                <div className="font-semibold text-slate-800">{it.productName}</div>
+                                <div className="text-[10px] text-slate-400 font-mono">{it.productSku}</div>
+                              </td>
+                              <td className="p-2.5 text-center">
+                                {it.isResellerEligible ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                    Reseller
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                                    Normal
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-right font-semibold text-slate-700">
+                                {formatRupiah(it.price)}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={it.quantity}
+                                  onChange={(e) => updateParsedQty(it.id, parseInt(e.target.value, 10) || 1)}
+                                  className="w-14 text-center px-1.5 py-1 border border-slate-200 rounded-lg text-xs font-bold"
+                                />
+                              </td>
+                              <td className="p-2.5 text-right font-bold text-slate-900">
+                                {formatRupiah(it.price * it.quantity)}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => removeItem(it.id)}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Manual Tab */}
+              {activeTab === 'manual' && (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Cari SKU, Nama Produk, atau Motif..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs focus:outline-hidden focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500"
                     />
                   </div>
 
-                  <button
-                    onClick={handleParse}
-                    className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-xs"
-                  >
-                    <Sparkles className="w-4 h-4" /> Parse & Cocokkan SKU
-                  </button>
-
-                  {/* Parsed Results */}
-                  {hasParsed && parsedItems.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-600">Hasil Parsing ({parsedItems.length} item):</h4>
-                      {parsedItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
-                            item.isMatched
-                              ? 'bg-emerald-50/60 border-emerald-200'
-                              : 'bg-amber-50/60 border-amber-200'
-                          }`}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              {item.isMatched ? (
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                              ) : (
-                                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                              )}
-                              <span className="text-xs font-bold text-slate-800 truncate">
-                                <span className="font-mono">{item.productSku}</span> — {item.productName}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5 ml-6">
-                              {formatRupiah(item.price)} /pcs
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <input
-                              type="number"
-                              value={item.quantity}
-                              onChange={(e) => updateParsedQty(item.id, parseInt(e.target.value, 10))}
-                              min={1}
-                              className="w-14 px-2 py-1 text-center rounded-lg border border-slate-200 text-xs font-bold bg-white"
-                            />
-                            <span className="text-xs text-slate-400">pcs</span>
-                            <button
-                              onClick={() => removeItem(item.id)}
-                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* === MANUAL TAB === */}
-              {activeTab === 'manual' && (
-                <div className="space-y-3">
-                  {/* Product Search */}
-                  <div className="relative">
-                    <label className="text-xs font-bold text-slate-600 mb-1 block">Cari produk (SKU / Nama / Motif):</label>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Ketik SKU atau nama produk..."
-                        className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500 outline-none bg-slate-50"
-                      />
-                    </div>
-
-                    {/* Search Dropdown */}
-                    {filteredProducts.length > 0 && (
-                      <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-xl border border-slate-200 shadow-lg z-20 max-h-48 overflow-y-auto">
-                        {filteredProducts.map((prod) => (
-                          <button
-                            key={prod.id}
-                            onClick={() => handleAddManualItem(prod)}
-                            className="w-full px-4 py-2.5 text-left hover:bg-violet-50 transition-colors flex items-center justify-between border-b border-slate-50 last:border-0"
+                  {filteredProducts.length > 0 && (
+                    <div className="border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden bg-white shadow-sm">
+                      {filteredProducts.map((p) => {
+                        const isEligible = checkIsResellerEligible(p.name, productTypes);
+                        return (
+                          <div
+                            key={p.id}
+                            className="p-2.5 flex items-center justify-between hover:bg-slate-50 transition-colors"
                           >
                             <div>
-                              <span className="text-xs font-bold font-mono text-slate-800">{prod.sku}</span>
-                              <span className="text-xs text-slate-500 ml-2">{prod.name}</span>
-                            </div>
-                            <span className="text-[11px] text-slate-400">
-                              Stok: {prod.availableStock}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {loadingProducts && (
-                    <div className="text-center py-4">
-                      <Loader2 className="w-5 h-5 animate-spin text-violet-500 mx-auto" />
-                      <p className="text-xs text-slate-400 mt-1">Memuat produk...</p>
-                    </div>
-                  )}
-
-                  {/* Manual Items List */}
-                  {manualItems.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-bold text-slate-600">Item yang akan ditambahkan ({manualItems.length} item):</h4>
-                      {manualItems.map((item) => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-xl border bg-emerald-50/60 border-emerald-200 flex items-center justify-between gap-3"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                              <span className="text-xs font-bold text-slate-800 truncate">
-                                <span className="font-mono">{item.productSku}</span> — {item.productName}
+                              <span className="font-mono font-bold text-xs text-slate-800">{p.sku}</span>
+                              <span className="ml-2 text-xs text-slate-600">{p.name} {p.motif ? `(${p.motif})` : ''}</span>
+                              <span className="ml-2 text-[10px] text-slate-400">
+                                (Stok: {p.availableStock} | Ecer: {formatRupiah(p.sellingPrice)})
                               </span>
                             </div>
-                            <div className="text-[11px] text-slate-500 mt-0.5 ml-6">
-                              {formatRupiah(item.price)} /pcs
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <input
-                              type="number"
-                              value={item.quantity}
-                              onChange={(e) => updateManualQty(item.id, parseInt(e.target.value, 10))}
-                              min={1}
-                              className="w-14 px-2 py-1 text-center rounded-lg border border-slate-200 text-xs font-bold bg-white"
-                            />
-                            <span className="text-xs text-slate-400">pcs</span>
                             <button
-                              onClick={() => removeItem(item.id)}
-                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                              type="button"
+                              onClick={() => handleAddManualItem(p)}
+                              className="px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-semibold flex items-center gap-1"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Plus className="w-3 h-3" /> Tambah
                             </button>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
 
-                  {manualItems.length === 0 && !loadingProducts && (
-                    <div className="text-center py-6 text-slate-400">
-                      <Package className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                      <p className="text-xs">Cari dan pilih produk dari dropdown di atas untuk menambahkan ke order.</p>
+                  {manualItems.length > 0 && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden mt-3">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600">
+                          <tr>
+                            <th className="p-2.5">Produk</th>
+                            <th className="p-2.5 text-center">Tipe</th>
+                            <th className="p-2.5 text-right">Harga</th>
+                            <th className="p-2.5 text-center">Qty</th>
+                            <th className="p-2.5 text-right">Subtotal</th>
+                            <th className="p-2.5 text-center">Aksi</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {manualItems.map((it) => (
+                            <tr key={it.id}>
+                              <td className="p-2.5">
+                                <div className="font-semibold text-slate-800">{it.productName}</div>
+                                <div className="text-[10px] text-slate-400 font-mono">{it.productSku}</div>
+                              </td>
+                              <td className="p-2.5 text-center">
+                                {it.isResellerEligible ? (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                    Reseller
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                                    Normal
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2.5 text-right font-semibold text-slate-700">
+                                {formatRupiah(it.price)}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={it.quantity}
+                                  onChange={(e) => updateManualQty(it.id, parseInt(e.target.value, 10) || 1)}
+                                  className="w-14 text-center px-1.5 py-1 border border-slate-200 rounded-lg text-xs font-bold"
+                                />
+                              </td>
+                              <td className="p-2.5 text-right font-bold text-slate-900">
+                                {formatRupiah(it.price * it.quantity)}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => removeItem(it.id)}
+                                  className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   )}
-                </div>
-              )}
-
-              {/* Summary */}
-              {currentItems.length > 0 && (
-                <div className="p-3.5 rounded-xl bg-violet-50/50 border border-violet-200/80 space-y-2">
-                  <div className="flex justify-between text-xs text-slate-600">
-                    <span>Item baru yang ditambahkan:</span>
-                    <span className="font-bold text-slate-800">{currentItems.length} item ({newQty} pcs)</span>
-                  </div>
-                  <div className="flex justify-between text-xs text-slate-600">
-                    <span>Total qty gabungan (lama + baru):</span>
-                    <span className="font-bold text-slate-800">{existingQty} + {newQty} = {combinedTotalQty} pcs</span>
-                  </div>
-                  <div className="flex justify-between text-xs text-slate-600">
-                    <span>Harga satuan baru (Tier {combinedTotalQty} pcs):</span>
-                    <span className="font-bold text-violet-700">{formatRupiah(unitPrice)} /pcs (berlaku untuk semua pcs)</span>
-                  </div>
-                  <div className="pt-1.5 border-t border-violet-200/60 space-y-1">
-                    <div className="flex justify-between text-xs text-slate-500">
-                      <span>Tagihan sebelumnya:</span>
-                      <span>{formatRupiah(order.totalAmount)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs text-slate-500">
-                      <span>Tambahan yang harus dibayar:</span>
-                      <span className="font-semibold text-emerald-700">+{formatRupiah(differenceAmount)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm font-bold pt-1 text-slate-900 border-t border-violet-200/40">
-                      <span>Total Tagihan Baru Keseluruhan:</span>
-                      <span className="text-rose-600 text-base">{formatRupiah(newTotalOrderAmount)}</span>
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
 
             {/* Footer */}
-            <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between shrink-0 bg-slate-50/80">
-              <button
-                onClick={onClose}
-                disabled={submitting}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-500 text-xs font-semibold hover:bg-white transition-colors"
-              >
-                Batal
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={submitting || currentItems.length === 0}
-                className="px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-xs font-bold flex items-center gap-2 transition-colors shadow-xs"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Menyimpan...
-                  </>
-                ) : (
-                  <>
-                    <Plus className="w-4 h-4" /> Simpan & Tambahkan
-                  </>
-                )}
-              </button>
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between shrink-0">
+              <div>
+                <span className="text-xs text-slate-500">Tambahan Subtotal:</span>
+                <div className="font-bold text-slate-900 text-base">{formatRupiah(addedSubtotal)}</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={submitting}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 text-xs font-semibold transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={submitting || currentItems.length === 0}
+                  className="px-5 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                >
+                  {submitting ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Menyimpan...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" /> Tambahkan ke Order
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </>
         )}
