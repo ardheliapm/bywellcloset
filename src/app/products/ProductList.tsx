@@ -5,7 +5,6 @@ import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTria
 import * as XLSX from 'xlsx';
 import AddProductModal from './AddProductModal';
 import ImportExcelModal from './ImportExcelModal';
-import ResellerPricelistModal from './ResellerPricelistModal';
 import ManageProductTypesModal from './ManageProductTypesModal';
 import { getStoredProductTypes, ProductMasterType, PRODUCT_TYPES_UPDATED_EVENT } from '@/lib/productTypes';
 import { ProductItem, toggleProductStatus, deleteProduct } from './actions';
@@ -20,7 +19,6 @@ type StockAlertFilter = 'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 export default function ProductList({ products }: ProductListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [isPricelistModalOpen, setIsPricelistModalOpen] = useState(false);
   const [isManageTypesOpen, setIsManageTypesOpen] = useState(false);
   const [masterTypes, setMasterTypes] = useState<ProductMasterType[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -194,15 +192,7 @@ export default function ProductList({ products }: ProductListProps) {
             onClick={() => setIsManageTypesOpen(true)}
             className="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-sm transition-colors flex items-center gap-2 shadow-xs"
           >
-            <Layers className="w-4 h-4 text-rose-600" /> Master Nama Produk
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsPricelistModalOpen(true)}
-            className="px-3.5 py-2.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold text-sm transition-colors flex items-center gap-2 shadow-xs"
-          >
-            <Tag className="w-4 h-4 text-amber-600" /> Pricelist Reseller
+            <Layers className="w-4 h-4 text-rose-600" /> Master Nama Produk & Pricelist
           </button>
 
           <button
@@ -589,10 +579,7 @@ export default function ProductList({ products }: ProductListProps) {
       {/* Import Excel Modal */}
       <ImportExcelModal isOpen={isImportModalOpen} onClose={() => setIsImportModalOpen(false)} />
 
-      {/* Reseller Pricelist Modal */}
-      <ResellerPricelistModal isOpen={isPricelistModalOpen} onClose={() => setIsPricelistModalOpen(false)} />
-
-      {/* Master Data Nama Produk Modal */}
+      {/* Master Data Nama Produk & Pricelist Modal */}
       <ManageProductTypesModal
         isOpen={isManageTypesOpen}
         onClose={() => setIsManageTypesOpen(false)}

@@ -20,6 +20,8 @@ import {
   ProductMasterType,
   getStoredProductTypes,
   checkIsResellerEligible,
+  findProductMasterType,
+  calculateProductPrice,
   PRODUCT_TYPES_UPDATED_EVENT,
 } from '@/lib/productTypes';
 
@@ -155,14 +157,40 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
     return null;
   };
 
-  // Helper to re-apply prices to parsed or manual items
-  const syncItemPrices = (items: ParsedNewItem[], tierPrice: number) => {
-    return items.map((it) => {
-      const isEligible = checkIsResellerEligible(it.productName, productTypes);
+  // Helper to re-apply prices to parsed or manual items based on custom tiers per product
+  const syncItemPrices = (newItemsList: ParsedNewItem[]) => {
+    const typesList = productTypes.length > 0 ? productTypes : getStoredProductTypes();
+
+    // 1. Hitung total kuantiti per grup tipe produk (gabungan existing order + item baru)
+    const groupQtyMap = new Map<string, number>();
+
+    // Tambah dari item existing order
+    order.items.forEach((ex) => {
+      const master = findProductMasterType(ex.productName, typesList);
+      const groupKey = master ? master.name.toUpperCase() : ex.productName.toUpperCase();
+      groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + ex.quantity);
+    });
+
+    // Tambah dari item baru
+    newItemsList.forEach((it) => {
+      const master = findProductMasterType(it.productName, typesList);
+      const groupKey = master ? master.name.toUpperCase() : it.productName.toUpperCase();
+      groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + it.quantity);
+    });
+
+    // 2. Hitung harga per item
+    return newItemsList.map((it) => {
+      const master = findProductMasterType(it.productName, typesList);
+      const groupKey = master ? master.name.toUpperCase() : it.productName.toUpperCase();
+      const combinedGroupQty = groupQtyMap.get(groupKey) || it.quantity;
+      const basePrice = it.sellingPrice || 42000;
+
+      const calc = calculateProductPrice(it.productName, combinedGroupQty, basePrice, typesList);
+
       return {
         ...it,
-        isResellerEligible: isEligible,
-        price: isEligible ? tierPrice : (it.sellingPrice || 42000),
+        isResellerEligible: master ? master.isResellerEligible : checkIsResellerEligible(it.productName, typesList),
+        price: calc.price,
       };
     });
   };
@@ -237,11 +265,8 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       return;
     }
 
-    // Re-sync with final tier
-    const tempResellerQty = results.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-    const finalSynced = syncItemPrices(results, finalTier);
-
+    // Re-sync with final pricing
+    const finalSynced = syncItemPrices(results);
     setParsedItems(finalSynced);
     setHasParsed(true);
   };
@@ -275,41 +300,31 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
       ];
     }
 
-    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-    setManualItems(syncItemPrices(updated, finalTier));
+    setManualItems(syncItemPrices(updated));
     setSearchQuery('');
   };
 
   // Update qty for manual item
   const updateManualQty = (id: string, qty: number) => {
     const updated = manualItems.map((m) => (m.id === id ? { ...m, quantity: Math.max(1, qty) } : m));
-    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-    setManualItems(syncItemPrices(updated, finalTier));
+    setManualItems(syncItemPrices(updated));
   };
 
   // Remove item
   const removeItem = (id: string) => {
     if (activeTab === 'paste') {
       const updated = parsedItems.filter((p) => p.id !== id);
-      const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-      const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-      setParsedItems(syncItemPrices(updated, finalTier));
+      setParsedItems(syncItemPrices(updated));
     } else {
       const updated = manualItems.filter((m) => m.id !== id);
-      const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-      const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-      setManualItems(syncItemPrices(updated, finalTier));
+      setManualItems(syncItemPrices(updated));
     }
   };
 
   // Update qty for parsed item
   const updateParsedQty = (id: string, qty: number) => {
     const updated = parsedItems.map((p) => (p.id === id ? { ...p, quantity: Math.max(1, qty) } : p));
-    const tempResellerQty = updated.reduce((acc, it) => it.isResellerEligible ? acc + it.quantity : acc, 0);
-    const finalTier = getResellerPrice(existingResellerQty + tempResellerQty);
-    setParsedItems(syncItemPrices(updated, finalTier));
+    setParsedItems(syncItemPrices(updated));
   };
 
   // Filtered products for manual search

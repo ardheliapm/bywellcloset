@@ -23,6 +23,8 @@ import {
   ProductMasterType,
   getStoredProductTypes,
   checkIsResellerEligible,
+  findProductMasterType,
+  calculateProductPrice,
   PRODUCT_TYPES_UPDATED_EVENT,
 } from '@/lib/productTypes';
 
@@ -196,38 +198,34 @@ BW76(3)`
     return null;
   };
 
-  // Sync pricing: Hanya produk BABY TRYSPAN (atau yang eligible reseller) yang dikenakan tier reseller price!
+  // Sync pricing: Hitung harga otomatis berdasarkan ketentuan tier masing-masing produk
   const applyResellerTierPricing = (items: ParsedItem[], currentTypes = productTypes) => {
     const typesList = currentTypes.length > 0 ? currentTypes : getStoredProductTypes();
 
-    // 1. Hitung total kuantiti KHUSUS produk yang eligible reseller (seperti BABY TRYSPAN)
-    const eligibleQty = items.reduce((acc, it) => {
-      const isEligible = checkIsResellerEligible(it.productName, typesList);
-      return isEligible ? acc + it.quantity : acc;
-    }, 0);
+    // 1. Kelompokkan total kuantiti per tipe/nama produk
+    const groupQtyMap = new Map<string, number>();
 
-    const currentTier = getResellerTier(eligibleQty);
+    items.forEach((it) => {
+      const master = findProductMasterType(it.productName, typesList);
+      const groupKey = master ? master.name.toUpperCase() : it.productName.toUpperCase();
+      groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + it.quantity);
+    });
 
+    // 2. Hitung harga per item sesuai tier kuantiti tipe produk tersebut
     return items.map((item) => {
-      const isEligible = checkIsResellerEligible(item.productName, typesList);
-      if (isEligible) {
-        // BABY TRYSPAN: Dapatkan harga reseller sesuai tier kuantiti BABY TRYSPAN
-        return {
-          ...item,
-          isResellerEligible: true,
-          wholesalePrice: currentTier.price,
-          price: currentTier.price,
-        };
-      } else {
-        // PARIS JAPAN / NON-RESELLER: Tetap menggunakan harga normal / sellingPrice produk
-        const normalPrice = item.sellingPrice || 42000;
-        return {
-          ...item,
-          isResellerEligible: false,
-          wholesalePrice: normalPrice,
-          price: normalPrice,
-        };
-      }
+      const master = findProductMasterType(item.productName, typesList);
+      const groupKey = master ? master.name.toUpperCase() : item.productName.toUpperCase();
+      const groupQty = groupQtyMap.get(groupKey) || item.quantity;
+      const basePrice = item.sellingPrice || 42000;
+
+      const calc = calculateProductPrice(item.productName, groupQty, basePrice, typesList);
+
+      return {
+        ...item,
+        isResellerEligible: master ? master.isResellerEligible : checkIsResellerEligible(item.productName, typesList),
+        wholesalePrice: calc.price,
+        price: calc.price,
+      };
     });
   };
 
