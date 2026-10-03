@@ -153,7 +153,10 @@ export default function ManageProductTypesModal({
       cleanedTiers = tiers.map((t) => ({
         ...t,
         minQty: Math.max(0, Number(t.minQty) || 0),
-        maxQty: t.maxQty !== null && t.maxQty !== undefined && t.maxQty !== '' ? Math.max(0, Number(t.maxQty) || 0) : null,
+        maxQty:
+          t.maxQty !== null && t.maxQty !== undefined && String(t.maxQty).trim() !== ''
+            ? Math.max(0, Number(t.maxQty) || 0)
+            : null,
         price: Math.max(0, Number(t.price) || 0),
       })).sort((a, b) => a.minQty - b.minQty);
     }
