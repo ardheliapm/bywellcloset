@@ -113,6 +113,8 @@ export async function createProduct(formData: {
     }
 
     revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/paste-order');
     revalidatePath('/finance');
     revalidatePath('/');
     return { success: true };
@@ -208,6 +210,8 @@ export async function bulkCreateProducts(items: BulkProductInput[], freightCost:
     }
 
     revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/paste-order');
     revalidatePath('/finance');
     revalidatePath('/');
 
@@ -231,6 +235,8 @@ export async function toggleProductStatus(id: string, currentStatus: boolean) {
     });
 
     revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/paste-order');
     return { success: true };
   } catch (error) {
     console.error('Error toggling product status:', error);
@@ -260,6 +266,8 @@ export async function deleteProduct(id: string) {
     });
 
     revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/paste-order');
     revalidatePath('/finance');
     revalidatePath('/');
     return { success: true };

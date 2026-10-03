@@ -2,6 +2,8 @@ import React from 'react';
 import { getFinanceSummary } from './actions';
 import FinanceClient from './FinanceClient';
 
+export const dynamic = 'force-dynamic';
+
 export default async function FinancePage() {
   const now = new Date();
   const currentMonth = now.getMonth() + 1;

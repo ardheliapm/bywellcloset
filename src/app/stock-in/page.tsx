@@ -3,6 +3,8 @@ import { getProducts } from '../products/actions';
 import { getStockInHistory } from './actions';
 import StockInClient from './StockInClient';
 
+export const dynamic = 'force-dynamic';
+
 export default async function StockInPage() {
   const products = await getProducts();
   const history = await getStockInHistory();

@@ -113,15 +113,31 @@ export default function StockInClient({ products, history }: StockInClientProps)
             </div>
           )}
 
+          {products.length === 0 && (
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Belum Ada Produk Terdaftar di Database</p>
+                <p className="text-amber-700 mt-0.5">
+                  Sebelum mencatat stok masuk, silakan tambahkan produk baru melalui menu{' '}
+                  <a href="/products" className="underline font-bold text-amber-900 hover:text-amber-950">
+                    Produk
+                  </a>{' '}
+                  atau gunakan fitur Impor Excel.
+                </p>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Table Rows for Products */}
             <div className="space-y-3">
               {rows.map((row, idx) => {
                 const selectedProd = products.find((p) => p.id === row.productId);
                 return (
-                  <div key={idx} className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                    <div className="flex-1 w-full">
-                      <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex-1 w-full space-y-1">
+                      <label className="block text-xs font-semibold text-slate-600">
                         Pilih Produk / SKU #{idx + 1}
                       </label>
                       <select
@@ -129,13 +145,28 @@ export default function StockInClient({ products, history }: StockInClientProps)
                         onChange={(e) => handleRowChange(idx, 'productId', e.target.value)}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20"
                       >
-                        <option value="">-- Pilih SKU Produk Hijab --</option>
+                        <option value="">
+                          {products.length === 0
+                            ? '-- Belum ada data produk (Tambah di menu Produk) --'
+                            : `-- Klik untuk pilih produk (${products.length} SKU tersedia) --`}
+                        </option>
                         {products.map((p) => (
                           <option key={p.id} value={p.id}>
-                            [{p.sku}] {p.name} {p.color ? `(${p.color})` : ''} - Stok: {p.physicalStock} pcs
+                            [{p.sku}] {p.name} {p.motif ? `- ${p.motif}` : ''} {p.color ? `(${p.color})` : ''} — Stok Fisik: {p.physicalStock} pcs
                           </option>
                         ))}
                       </select>
+
+                      {selectedProd && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
+                          <span className="font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
+                            SKU: {selectedProd.sku}
+                          </span>
+                          <span>Stok Sekarang: <strong>{selectedProd.physicalStock} pcs</strong></span>
+                          <span>•</span>
+                          <span>Tersedia: <strong>{selectedProd.availableStock} pcs</strong></span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="w-full sm:w-32">
