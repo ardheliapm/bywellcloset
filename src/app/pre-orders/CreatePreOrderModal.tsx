@@ -27,6 +27,8 @@ import {
   calculateProductPrice,
   findProductMasterType,
   checkIsResellerEligible,
+  ProductMasterType,
+  DEFAULT_PRODUCT_TYPES,
 } from '@/lib/productTypes';
 
 interface CreatePreOrderModalProps {
@@ -165,32 +167,63 @@ BW83(3)`
     return null;
   };
 
+  // Calculate reseller tier price for total order pcs
+  const getResellerTierPriceForTotalQty = (
+    totalQty: number,
+    typesList: ProductMasterType[] = DEFAULT_PRODUCT_TYPES
+  ): number => {
+    const resellerType = typesList.find((t) => t.isResellerEligible) || DEFAULT_PRODUCT_TYPES[0];
+    if (!resellerType || !resellerType.tiers || resellerType.tiers.length === 0) {
+      return 42000;
+    }
+    const sorted = [...resellerType.tiers].sort((a, b) => b.minQty - a.minQty);
+    for (const tier of sorted) {
+      const isMin = totalQty >= tier.minQty;
+      const isMax = tier.maxQty === null || tier.maxQty === undefined || totalQty <= tier.maxQty;
+      if (isMin && isMax) {
+        return tier.price;
+      }
+    }
+    return 42000;
+  };
+
   // Recalculate tier prices based on total quantity of all PO items
   const recalculateTierPrices = (currentItems: FormItem[]) => {
     const types = getStoredProductTypes();
-    const groupCountMap = new Map<string, number>();
-
+    
+    // Calculate total quantity of all reseller pool items
+    let totalResellerPoolQty = 0;
     currentItems.forEach((it) => {
-      if (!it.productName) return;
-      const master = findProductMasterType(it.productName, types);
-      const key = master ? master.name : '__OTHER__';
-      groupCountMap.set(key, (groupCountMap.get(key) || 0) + it.quantityOrdered);
+      const nameToCheck = it.productName || it.productSku;
+      if (!nameToCheck) return;
+      const master = findProductMasterType(nameToCheck, types);
+      if (!master || master.isResellerEligible) {
+        totalResellerPoolQty += Number(it.quantityOrdered) || 0;
+      }
     });
 
+    const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
+
     const refreshed = currentItems.map((it) => {
-      if (!it.productName) return it;
-      const master = findProductMasterType(it.productName, types);
-      if (master && master.isResellerEligible) {
-        const totalGrpQty = groupCountMap.get(master.name) || it.quantityOrdered;
+      const nameToCheck = it.productName || it.productSku;
+      if (!nameToCheck) return it;
+      const master = findProductMasterType(nameToCheck, types);
+
+      // Explicit non-reseller types keep their own price
+      if (master && !master.isResellerEligible) {
         const prod = products.find((p) => p.id === it.productId);
-        const basePrice = prod?.sellingPrice || master.defaultPrice || 42000;
-        const calc = calculateProductPrice(it.productName, totalGrpQty, basePrice, types);
+        const basePrice = prod?.sellingPrice || master.defaultPrice || 85000;
         return {
           ...it,
-          price: calc.price,
+          price: basePrice,
         };
       }
-      return it;
+
+      // All regular and new unregistered motifs get the total reseller tier unit price
+      return {
+        ...it,
+        price: resellerUnitPrice,
+      };
     });
 
     setItems(refreshed);
@@ -276,35 +309,36 @@ BW83(3)`
     if (parsedList.length === 0) return null;
 
     const types = getStoredProductTypes();
-    const groupCountMap = new Map<string, number>();
-    const totalAllQty = parsedList.reduce((sum, it) => sum + it.quantityOrdered, 0);
-
+    let totalResellerPoolQty = 0;
     parsedList.forEach((it) => {
-      if (!it.productName) return;
-      const master = findProductMasterType(it.productName, types);
-      const key = master ? master.name : '__OTHER__';
-      groupCountMap.set(key, (groupCountMap.get(key) || 0) + it.quantityOrdered);
+      const nameToCheck = it.productName || it.productSku;
+      if (!nameToCheck) return;
+      const master = findProductMasterType(nameToCheck, types);
+      if (!master || master.isResellerEligible) {
+        totalResellerPoolQty += Number(it.quantityOrdered) || 0;
+      }
     });
 
+    const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
+
     const refreshed = parsedList.map((it) => {
-      if (!it.productName) return it;
-      const master = findProductMasterType(it.productName, types);
-      if (master && master.isResellerEligible) {
-        const totalGrpQty = groupCountMap.get(master.name) || it.quantityOrdered;
+      const nameToCheck = it.productName || it.productSku;
+      if (!nameToCheck) return it;
+      const master = findProductMasterType(nameToCheck, types);
+
+      if (master && !master.isResellerEligible) {
         const prod = products.find((p) => p.id === it.productId);
-        const basePrice = prod?.sellingPrice || master.defaultPrice || 42000;
-        const calc = calculateProductPrice(it.productName, totalGrpQty, basePrice, types);
+        const basePrice = prod?.sellingPrice || master.defaultPrice || 85000;
         return {
           ...it,
-          price: calc.price,
-        };
-      } else {
-        const calc = calculateProductPrice(it.productName, totalAllQty, 42000, types);
-        return {
-          ...it,
-          price: calc.price,
+          price: basePrice,
         };
       }
+
+      return {
+        ...it,
+        price: resellerUnitPrice,
+      };
     });
 
     return {
