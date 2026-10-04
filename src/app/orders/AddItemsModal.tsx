@@ -132,27 +132,57 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
   const resellerTierUnitPrice = getResellerPrice(combinedResellerQty);
 
   // Find best match in catalog
+  // Accurate product match without false positives
   const findBestProductMatch = (query: string): ProductMatchInfo | null => {
     const q = query.toLowerCase().trim();
     if (!q) return null;
+    const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
-    const exactSku = products.find((p) => p.sku.toLowerCase() === q);
+    // 1. Exact SKU match
+    const exactSku = products.find(
+      (p) =>
+        p.sku.toLowerCase() === q ||
+        (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
+    );
     if (exactSku) return exactSku;
 
-    const exactName = products.find((p) => p.name.toLowerCase() === q);
-    if (exactName) return exactName;
-
-    const exactMotif = products.find((p) => p.motif && p.motif.toLowerCase() === q);
+    // 2. Exact Motif match
+    const exactMotif = products.find(
+      (p) => p.motif && p.motif.toLowerCase().trim() === q
+    );
     if (exactMotif) return exactMotif;
 
-    const partSku = products.find((p) => p.sku.toLowerCase().includes(q) || q.includes(p.sku.toLowerCase()));
-    if (partSku) return partSku;
+    // 3. Exact Full Name match
+    const exactName = products.find((p) => p.name.toLowerCase().trim() === q);
+    if (exactName) return exactName;
 
-    const partName = products.find((p) => p.name.toLowerCase().includes(q) || q.includes(p.name.toLowerCase()));
-    if (partName) return partName;
+    // 4. Exact Combined Name & Motif
+    const exactCombined = products.find((p) => {
+      const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
+      const withColor = `${p.name} ${p.motif || ''} ${p.color || ''}`.toLowerCase().trim();
+      const skuMotif = `${p.sku} ${p.motif || ''}`.toLowerCase().trim();
+      return full === q || withColor === q || skuMotif === q;
+    });
+    if (exactCombined) return exactCombined;
 
-    const partMotif = products.find((p) => p.motif && (p.motif.toLowerCase().includes(q) || q.includes(p.motif.toLowerCase())));
-    if (partMotif) return partMotif;
+    // 5. SKU prefix match
+    if (cleanQ.length >= 3) {
+      const prefixSku = products.find((p) => {
+        const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
+        return pCleanSku === cleanQ || (pCleanSku.startsWith(cleanQ) && cleanQ.length >= 4);
+      });
+      if (prefixSku) return prefixSku;
+    }
+
+    // 6. Database product name / motif contains entire query
+    if (q.length >= 4) {
+      const nameContainsQuery = products.find((p) => {
+        const pName = p.name.toLowerCase();
+        const pMotif = p.motif ? p.motif.toLowerCase() : '';
+        return pName.includes(q) || (pMotif && pMotif.includes(q));
+      });
+      if (nameContainsQuery) return nameContainsQuery;
+    }
 
     return null;
   };
