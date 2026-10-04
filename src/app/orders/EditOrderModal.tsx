@@ -27,6 +27,7 @@ import {
   findProductMasterType,
   checkIsResellerEligible,
 } from '@/lib/productTypes';
+import SearchableProductSelect from '@/components/SearchableProductSelect';
 
 interface EditOrderModalProps {
   isOpen: boolean;
@@ -500,19 +501,15 @@ export default function EditOrderModal({
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
                 {/* Select from master */}
                 <div className="sm:col-span-6">
-                  <select
+                  <SearchableProductSelect
+                    products={products}
                     value={selectedProductId}
-                    onChange={(e) => handleSelectProduct(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500/20"
-                  >
-                    <option value="">-- Pilih Produk dari Master Data --</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        [{p.sku}] {p.name} {p.motif ? `- ${p.motif}` : ''} (Tersedia: {p.availableStock} pcs)
-                      </option>
-                    ))}
-                    <option value="__MANUAL__">✍️ Ketik Manual (Produk Custom)</option>
-                  </select>
+                    onChange={(val) => handleSelectProduct(val)}
+                    placeholder="Ketik SKU / Nama Produk (contoh: BW83, 119)..."
+                    allowManual={true}
+                    onManualSelect={() => handleSelectProduct('__MANUAL__')}
+                    stockType="AVAILABLE"
+                  />
                 </div>
 
                 {/* SKU (if manual) or Name */}

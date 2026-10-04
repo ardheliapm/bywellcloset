@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { ArrowDownToLine, Plus, Trash2, CheckCircle2, AlertCircle, Loader2, Truck, Package, Search } from 'lucide-react';
 import { ProductItem } from '../products/actions';
 import { submitStockInBatch } from './actions';
+import SearchableProductSelect from '@/components/SearchableProductSelect';
 
 interface StockInClientProps {
   products: ProductItem[];
@@ -140,33 +141,13 @@ export default function StockInClient({ products, history }: StockInClientProps)
                       <label className="block text-xs font-semibold text-slate-600">
                         Pilih Produk / SKU #{idx + 1}
                       </label>
-                      <select
+                      <SearchableProductSelect
+                        products={products}
                         value={row.productId}
-                        onChange={(e) => handleRowChange(idx, 'productId', e.target.value)}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20"
-                      >
-                        <option value="">
-                          {products.length === 0
-                            ? '-- Belum ada data produk (Tambah di menu Produk) --'
-                            : `-- Klik untuk pilih produk (${products.length} SKU tersedia) --`}
-                        </option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            [{p.sku}] {p.name} {p.motif ? `- ${p.motif}` : ''} {p.color ? `(${p.color})` : ''} — Stok Fisik: {p.physicalStock} pcs
-                          </option>
-                        ))}
-                      </select>
-
-                      {selectedProd && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-500">
-                          <span className="font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">
-                            SKU: {selectedProd.sku}
-                          </span>
-                          <span>Stok Sekarang: <strong>{selectedProd.physicalStock} pcs</strong></span>
-                          <span>•</span>
-                          <span>Tersedia: <strong>{selectedProd.availableStock} pcs</strong></span>
-                        </div>
-                      )}
+                        onChange={(val) => handleRowChange(idx, 'productId', val)}
+                        placeholder="Ketik SKU / Nama Produk (contoh: BW83, 154, Paris)..."
+                        stockType="PHYSICAL"
+                      />
                     </div>
 
                     <div className="w-full sm:w-32">
