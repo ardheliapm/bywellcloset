@@ -80,3 +80,23 @@ export async function changePin(oldPin: string, newPin: string) {
     return { success: false, error: error.message || 'Gagal mengubah PIN.' };
   }
 }
+
+export async function resetPinToDefault() {
+  try {
+    const defaultHash = hashPin('123456');
+    await prisma.user.upsert({
+      where: { username: 'admin' },
+      update: { password: defaultHash },
+      create: {
+        username: 'admin',
+        name: 'Admin Bywell Closet',
+        password: defaultHash,
+        role: 'ADMIN',
+      },
+    });
+    return { success: true, message: 'PIN berhasil dikembalikan ke 123456' };
+  } catch (error: any) {
+    console.error('Error resetting PIN:', error);
+    return { success: false, error: error.message || 'Gagal mereset PIN' };
+  }
+}

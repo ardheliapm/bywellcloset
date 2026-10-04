@@ -112,20 +112,13 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* Footer Info & Quick Lock */}
-        <div className="p-4 border-t border-slate-800/80 space-y-2">
-          <button
-            type="button"
-            onClick={() => lockApp()}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-slate-800 hover:bg-rose-600/20 text-slate-300 hover:text-rose-400 border border-slate-700/60 font-semibold text-xs transition-colors"
-          >
-            <Lock className="w-4 h-4" /> Kunci Layar (PIN)
-          </button>
+        {/* Footer Info */}
+        <div className="p-4 border-t border-slate-800/80">
           <div className="bg-slate-800/50 rounded-xl p-2.5 border border-slate-800 flex items-center justify-between text-xs text-slate-400">
             <div>
               <p className="font-medium text-slate-300">Status Sistem</p>
               <p className="text-emerald-400 flex items-center gap-1 mt-0.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> PIN Aktif & Aman
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Sistem Aktif & Siap
               </p>
             </div>
             <span className="px-2 py-1 rounded bg-slate-700 text-slate-300 font-mono text-[10px]">

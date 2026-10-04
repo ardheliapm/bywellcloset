@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, Sparkles, Delete, AlertCircle, Loader2, Eye, EyeOff, ArrowRight } from 'lucide-react';
-import { verifyPin } from './actions';
+import { Lock, Sparkles, Delete, AlertCircle, Loader2, Eye, EyeOff, ArrowRight, RotateCcw } from 'lucide-react';
+import { verifyPin, resetPinToDefault } from './actions';
 
 const PIN_LENGTH = 6;
 
@@ -76,6 +76,13 @@ export default function PinClient() {
     setPin('');
     setError(null);
     inputRef.current?.focus();
+  };
+
+  const handleUseDefaultPin = async () => {
+    setPin('123456');
+    setError(null);
+    await resetPinToDefault();
+    triggerSubmit('123456');
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -233,11 +240,19 @@ export default function PinClient() {
           </button>
         </form>
 
-        {/* Footer Hint */}
-        <div className="pt-2 border-t border-slate-800/80 text-center space-y-1">
-          <p className="text-[11px] text-slate-500">
+        {/* Footer Hint with 1-Click Reset / Auto-fill */}
+        <div className="pt-2 border-t border-slate-800/80 text-center space-y-2">
+          <p className="text-[11px] text-slate-400">
             PIN Bawaan Default: <span className="font-mono text-rose-400 font-bold tracking-wider">123456</span>
           </p>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={handleUseDefaultPin}
+            className="text-[11px] text-rose-400 hover:text-rose-300 underline font-semibold flex items-center justify-center gap-1 mx-auto cursor-pointer"
+          >
+            <RotateCcw className="w-3 h-3" /> Masuk dengan PIN Default (123456)
+          </button>
         </div>
       </div>
     </div>
