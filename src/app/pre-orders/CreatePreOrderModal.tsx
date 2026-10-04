@@ -196,31 +196,17 @@ BW83(3)`
     setItems(refreshed);
   };
 
-  // Parse WhatsApp Text
-  const handleParseWhatsAppText = () => {
-    setError(null);
-    if (!rawText.trim()) {
-      setError('Silakan tempel teks pesanan WhatsApp terlebih dahulu.');
-      return;
-    }
-
-    const lines = rawText
+  // Parse WhatsApp Text String Helper
+  const parseWhatsAppStringToItems = (text: string) => {
+    if (!text.trim()) return null;
+    const lines = text
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    if (lines.length === 0) {
-      setError('Teks tidak memiliki format yang valid.');
-      return;
-    }
+    if (lines.length === 0) return null;
 
-    // Line 1: Customer Name
     const rawCustomer = lines[0].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
-    if (rawCustomer && !customerName) {
-      setCustomerName(rawCustomer);
-    }
-
-    // Remaining lines: Items
     const itemLines = lines.slice(1);
     const rawResultsMap = new Map<
       string,
@@ -287,14 +273,61 @@ BW83(3)`
       isMatched: !!r.product,
     }));
 
-    if (parsedList.length === 0) {
-      setError('Tidak ada rincian produk yang berhasil dikenali dari teks.');
+    if (parsedList.length === 0) return null;
+
+    const types = getStoredProductTypes();
+    const groupCountMap = new Map<string, number>();
+    const totalAllQty = parsedList.reduce((sum, it) => sum + it.quantityOrdered, 0);
+
+    parsedList.forEach((it) => {
+      if (!it.productName) return;
+      const master = findProductMasterType(it.productName, types);
+      const key = master ? master.name : '__OTHER__';
+      groupCountMap.set(key, (groupCountMap.get(key) || 0) + it.quantityOrdered);
+    });
+
+    const refreshed = parsedList.map((it) => {
+      if (!it.productName) return it;
+      const master = findProductMasterType(it.productName, types);
+      if (master && master.isResellerEligible) {
+        const totalGrpQty = groupCountMap.get(master.name) || it.quantityOrdered;
+        const prod = products.find((p) => p.id === it.productId);
+        const basePrice = prod?.sellingPrice || master.defaultPrice || 42000;
+        const calc = calculateProductPrice(it.productName, totalGrpQty, basePrice, types);
+        return {
+          ...it,
+          price: calc.price,
+        };
+      } else {
+        const calc = calculateProductPrice(it.productName, totalAllQty, 42000, types);
+        return {
+          ...it,
+          price: calc.price,
+        };
+      }
+    });
+
+    return {
+      customer: rawCustomer,
+      items: refreshed,
+    };
+  };
+
+  // Parse WhatsApp Text on button click
+  const handleParseWhatsAppText = () => {
+    setError(null);
+    const parsed = parseWhatsAppStringToItems(rawText);
+    if (!parsed) {
+      setError('Teks WhatsApp tidak memiliki format yang valid. Pastikan ada nama customer di baris pertama dan rincian produk di baris berikutnya.');
       return;
     }
 
-    recalculateTierPrices(parsedList);
+    if (parsed.customer) {
+      setCustomerName(parsed.customer);
+    }
+    setItems(parsed.items);
     setHasParsed(true);
-    setSuccessMsg(`Berhasil mem-parse ${parsedList.length} produk dari teks WhatsApp!`);
+    setSuccessMsg(`Berhasil mem-parse ${parsed.items.length} produk untuk ${parsed.customer || 'Customer'}!`);
     setTimeout(() => setSuccessMsg(null), 3000);
   };
 
@@ -359,32 +392,53 @@ BW83(3)`
     recalculateTierPrices(updated);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setError(null);
     setSuccessMsg(null);
 
-    if (!customerName.trim()) {
-      setError('Nama customer wajib diisi.');
+    let activeCustomerName = customerName.trim();
+    let activeItems = [...items];
+
+    // If user is in paste tab and has rawText, auto-parse if needed
+    if (activeTab === 'paste' && rawText.trim()) {
+      const parsed = parseWhatsAppStringToItems(rawText);
+      if (parsed) {
+        if (!activeCustomerName && parsed.customer) {
+          activeCustomerName = parsed.customer;
+          setCustomerName(parsed.customer);
+        }
+        if (activeItems.length === 0 || !activeItems[0].productSku || !hasParsed) {
+          activeItems = parsed.items;
+          setItems(parsed.items);
+        }
+      }
+    }
+
+    if (!activeCustomerName) {
+      setError('Nama customer wajib diisi. Silakan isi Nama Customer di kolom atas atau di baris pertama teks WhatsApp.');
       return;
     }
 
-    const validItems = items.filter((it) => it.productSku.trim() && it.quantityOrdered > 0);
+    const validItems = activeItems.filter(
+      (it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0
+    );
+
     if (validItems.length === 0) {
-      setError('Silakan pilih minimal 1 produk untuk dicatat PO.');
+      setError('Silakan tentukan minimal 1 produk/motif untuk dicatat PO.');
       return;
     }
 
     setLoading(true);
 
     const res = await createPreOrder({
-      customerName: customerName.trim(),
+      customerName: activeCustomerName,
       customerPhone: customerPhone.trim() || null,
       notes: notes.trim() || null,
       items: validItems.map((it) => ({
         productId: it.productId,
-        productSku: it.productSku,
-        productName: it.productName,
+        productSku: (it.productSku || it.productName || 'PO-ITEM').trim(),
+        productName: (it.productName || it.productSku || 'Produk PO').trim(),
         price: it.price,
         quantityOrdered: it.quantityOrdered,
       })),
@@ -520,7 +574,6 @@ BW83(3)`
                 </label>
                 <input
                   type="text"
-                  required
                   placeholder="Contoh: KAK DELLA"
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
@@ -775,8 +828,8 @@ BW83(3)`
               Batal
             </button>
             <button
-              type="submit"
-              form="create-po-form"
+              type="button"
+              onClick={() => handleSubmit()}
               disabled={loading}
               className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
             >

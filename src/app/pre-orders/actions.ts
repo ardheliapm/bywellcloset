@@ -107,13 +107,23 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const poNumber = `PO-${dateStr}-${randomSuffix}`;
 
-    const cleanItems = items.map((it) => ({
-      productId: it.productId || null,
-      productSku: it.productSku.trim().toUpperCase(),
-      productName: it.productName.trim(),
-      price: Math.max(0, Number(it.price) || 0),
-      quantityOrdered: Math.max(1, Number(it.quantityOrdered) || 1),
-    }));
+    const cleanItems = items
+      .filter((it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0)
+      .map((it) => {
+        const pSku = (it.productSku || it.productName || 'PO-ITEM').trim().toUpperCase();
+        const pName = (it.productName || it.productSku || 'Produk PO').trim();
+        return {
+          productId: it.productId || null,
+          productSku: pSku,
+          productName: pName,
+          price: Math.max(0, Math.floor(Number(it.price) || 0)),
+          quantityOrdered: Math.max(1, Math.floor(Number(it.quantityOrdered) || 1)),
+        };
+      });
+
+    if (cleanItems.length === 0) {
+      return { success: false, error: 'Minimal harus ada 1 produk yang valid dalam PO.' };
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       let totalAmount = 0;
@@ -146,7 +156,7 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
           }
         }
 
-        const subtotal = it.price * it.quantityOrdered;
+        const subtotal = Math.floor(it.price * it.quantityOrdered);
         totalAmount += subtotal;
         totalOrderedPcs += it.quantityOrdered;
         totalFulfilledPcs += fulfilledNow;
