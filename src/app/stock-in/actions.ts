@@ -52,12 +52,26 @@ export async function submitStockInBatch(items: StockInItemInput[], freightCost:
         // 2. Auto-Allocate to Waiting Pre-Orders (FIFO: oldest PO first)
         let remainingQty = item.quantity;
 
+        const orFilters: Array<{
+          productId?: string;
+          productSku?: { equals: string; mode: 'insensitive' };
+          productName?: { contains: string; mode: 'insensitive' };
+        }> = [
+          { productId: item.productId },
+          { productSku: { equals: updatedProd.sku, mode: 'insensitive' } },
+          { productName: { contains: updatedProd.sku, mode: 'insensitive' } },
+        ];
+
+        if (updatedProd.motif) {
+          orFilters.push({ productName: { contains: updatedProd.motif, mode: 'insensitive' } });
+        }
+        if (updatedProd.name) {
+          orFilters.push({ productName: { contains: updatedProd.name, mode: 'insensitive' } });
+        }
+
         const waitingPoItems = await tx.preOrderItem.findMany({
           where: {
-            OR: [
-              { productId: item.productId },
-              { productSku: updatedProd.sku },
-            ],
+            OR: orFilters,
             preOrder: {
               status: { in: ['WAITING_STOCK', 'PARTIAL_READY'] },
             },

@@ -553,82 +553,176 @@ BW83(3)`
                 </button>
               </div>
 
-              <div className="space-y-2.5">
+                      <div className="space-y-2.5">
                 {items.map((row, idx) => (
                   <div
                     key={row.id || idx}
-                    className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                    className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col gap-2.5"
                   >
-                    {/* Searchable Select */}
-                    <div className="flex-1 w-full">
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        Pilih Produk PO #{idx + 1}
-                      </label>
-                      <SearchableProductSelect
-                        products={products}
-                        value={row.productId || ''}
-                        onChange={(val, prod) => handleProductSelect(idx, val, prod)}
-                        placeholder="Ketik SKU atau nama motif..."
-                        stockType="AVAILABLE"
-                      />
-                    </div>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                      {/* Searchable Select or Manual Input */}
+                      <div className="flex-1 w-full">
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-semibold text-slate-600">
+                            Produk PO #{idx + 1}
+                          </label>
+                          {row.productId ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...items];
+                                updated[idx] = {
+                                  ...updated[idx],
+                                  productId: null,
+                                  isMatched: false,
+                                };
+                                setItems(updated);
+                              }}
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-medium underline cursor-pointer"
+                            >
+                              ✍️ Ubah ke Input Produk Baru (Manual)
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...items];
+                                updated[idx] = {
+                                  ...updated[idx],
+                                  productId: products[0]?.id || null,
+                                  productSku: products[0]?.sku || '',
+                                  productName: products[0]?.name || '',
+                                  price: products[0]?.sellingPrice || 42000,
+                                  isMatched: true,
+                                };
+                                setItems(updated);
+                                recalculateTierPrices(updated);
+                              }}
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-medium underline cursor-pointer"
+                            >
+                              🔍 Cari dari Master Data
+                            </button>
+                          )}
+                        </div>
 
-                    {/* Quantity */}
-                    <div className="w-full sm:w-28">
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        Jumlah PO (Pcs)
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={row.quantityOrdered}
-                        onChange={(e) =>
-                          handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
-                        }
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
-                      />
-                    </div>
+                        {row.productId ? (
+                          <SearchableProductSelect
+                            products={products}
+                            value={row.productId}
+                            onChange={(val, prod) => handleProductSelect(idx, val, prod)}
+                            placeholder="Ketik SKU atau nama motif..."
+                            stockType="AVAILABLE"
+                            allowManual={true}
+                            onManualSelect={() => {
+                              const updated = [...items];
+                              updated[idx] = {
+                                ...updated[idx],
+                                productId: null,
+                                isMatched: false,
+                              };
+                              setItems(updated);
+                            }}
+                          />
+                        ) : (
+                          <div className="space-y-1.5">
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="Nama motif / produk baru (cth: Gamis Rayon Spark Flower)..."
+                                value={row.productName}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const updated = [...items];
+                                  updated[idx] = {
+                                    ...updated[idx],
+                                    productName: val,
+                                    productSku: updated[idx].productSku || val.toUpperCase().replace(/\s+/g, '-'),
+                                  };
+                                  setItems(updated);
+                                  recalculateTierPrices(updated);
+                                }}
+                                className="flex-1 px-3 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
+                              />
+                              <input
+                                type="text"
+                                placeholder="SKU (cth: BW83 / SPARK)"
+                                value={row.productSku}
+                                onChange={(e) => {
+                                  const updated = [...items];
+                                  updated[idx] = {
+                                    ...updated[idx],
+                                    productSku: e.target.value.toUpperCase(),
+                                  };
+                                  setItems(updated);
+                                }}
+                                className="w-28 px-2.5 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-amber-700 font-medium bg-amber-50/80 px-2 py-0.5 rounded-md border border-amber-200/60">
+                              <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
+                              <span>✨ Produk Baru (Belum ada di Master Data - otomatis dicocokkan saat Stok Masuk)</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
 
-                    {/* Price */}
-                    <div className="w-full sm:w-32">
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
-                        Harga Reseller (Rp)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                      {/* Quantity */}
+                      <div className="w-full sm:w-24">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          Qty (Pcs)
+                        </label>
                         <input
                           type="number"
-                          min="0"
-                          value={row.price}
+                          min="1"
+                          value={row.quantityOrdered}
                           onChange={(e) =>
-                            handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                            handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
                           }
-                          className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
                         />
                       </div>
-                    </div>
 
-                    {/* Subtotal */}
-                    <div className="w-full sm:w-28 text-right hidden sm:block">
-                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                        Subtotal
-                      </label>
-                      <span className="text-xs font-bold text-slate-900">
-                        {formatRupiah(row.price * row.quantityOrdered)}
-                      </span>
-                    </div>
+                      {/* Price */}
+                      <div className="w-full sm:w-28">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
+                          Harga Satuan (Rp)
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={row.price}
+                            onChange={(e) =>
+                              handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                            }
+                            className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </div>
+                      </div>
 
-                    {/* Remove */}
-                    <div className="sm:pt-5 shrink-0 self-end sm:self-center">
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveItemRow(idx)}
-                        disabled={items.length <= 1}
-                        className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
-                        title="Hapus baris"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Subtotal */}
+                      <div className="w-full sm:w-28 text-right hidden sm:block">
+                        <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                          Subtotal
+                        </label>
+                        <span className="text-xs font-bold text-slate-900">
+                          {formatRupiah(row.price * row.quantityOrdered)}
+                        </span>
+                      </div>
+
+                      {/* Remove */}
+                      <div className="sm:pt-5 shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveItemRow(idx)}
+                          disabled={items.length <= 1}
+                          className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
+                          title="Hapus baris"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
