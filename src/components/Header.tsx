@@ -10,6 +10,7 @@ const titleMap: Record<string, string> = {
   '/stock-in': 'Stok Masuk (Stock In)',
   '/paste-order': 'Paste Order WhatsApp',
   '/orders': 'Daftar Order Pelanggan',
+  '/pre-orders': 'Pre-Order (PO) & Antrean Kedatangan',
   '/motif-analysis': 'Analisis & Performa Motif',
   '/finance': 'Keuangan & Laba Rugi',
   '/stock-history': 'Riwayat Mutasi Stok',

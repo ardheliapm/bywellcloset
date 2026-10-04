@@ -15,9 +15,9 @@ import {
   Sparkles,
   PieChart,
   Wallet,
+  Clock,
   Lock,
 } from 'lucide-react';
-import { lockApp } from '@/app/pin/actions';
 
 const navItems = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -25,6 +25,7 @@ const navItems = [
   { name: 'Stok Masuk', href: '/stock-in', icon: ArrowDownToLine },
   { name: 'Paste Order', href: '/paste-order', icon: ClipboardPaste },
   { name: 'Daftar Order', href: '/orders', icon: ShoppingBag },
+  { name: 'Pre-Order (PO)', href: '/pre-orders', icon: Clock },
   { name: 'Performa Motif', href: '/motif-analysis', icon: PieChart },
   { name: 'Keuangan & Profit', href: '/finance', icon: Wallet },
   { name: 'Riwayat Stok', href: '/stock-history', icon: History },

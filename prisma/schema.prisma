@@ -23,6 +23,7 @@ model Product {
   updatedAt         DateTime           @updatedAt @map("updated_at")
   stockTransactions StockTransaction[]
   orderItems        OrderItem[]
+  preOrderItems     PreOrderItem[]
 
   @@map("products")
 }
@@ -75,6 +76,42 @@ model OrderItem {
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
 
   @@map("order_items")
+}
+
+model PreOrder {
+  id            String         @id @default(uuid())
+  poNumber      String         @unique @map("po_number")
+  customerName  String         @map("customer_name")
+  customerPhone String?        @map("customer_phone")
+  status        String         @default("WAITING_STOCK") // WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED, SHIPPED, CANCELLED
+  totalAmount   Int            @default(0) @map("total_amount")
+  notes         String?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  items         PreOrderItem[]
+
+  @@map("pre_orders")
+}
+
+model PreOrderItem {
+  id                String    @id @default(uuid())
+  preOrderId        String    @map("pre_order_id")
+  productId         String?   @map("product_id")
+  productSku        String    @map("product_sku")
+  productName       String    @map("product_name")
+  price             Int       @default(0)
+  quantityOrdered   Int       @default(1) @map("quantity_ordered")
+  quantityFulfilled Int       @default(0) @map("quantity_fulfilled")
+  quantityShipped   Int       @default(0) @map("quantity_shipped")
+  subtotal          Int       @default(0)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  preOrder          PreOrder  @relation(fields: [preOrderId], references: [id], onDelete: Cascade)
+  product           Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@map("pre_order_items")
 }
 
 model ZiplockStock {
