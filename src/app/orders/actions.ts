@@ -422,3 +422,227 @@ export async function addItemsToOrder(
   }
 }
 
+// 6. Update Full Order Details (Edit Customer, Quantities, Prices, Add/Remove Items, Sync Stock)
+export interface EditOrderItemInput {
+  id?: string;
+  productId?: string | null;
+  productSku: string;
+  productName: string;
+  price: number;
+  quantity: number;
+}
+
+export interface UpdateOrderPayload {
+  orderId: string;
+  customerName: string;
+  customerPhone?: string | null;
+  notes?: string | null;
+  items: EditOrderItemInput[];
+}
+
+export async function updateOrderDetails(payload: UpdateOrderPayload) {
+  try {
+    const { orderId, customerName, customerPhone, notes, items } = payload;
+
+    if (!customerName || !customerName.trim()) {
+      return { success: false, error: 'Nama customer wajib diisi.' };
+    }
+
+    if (!items || items.length === 0) {
+      return { success: false, error: 'Pesanan harus memiliki minimal 1 produk.' };
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
+
+    if (!order) {
+      return { success: false, error: 'Pesanan tidak ditemukan.' };
+    }
+
+    if (order.status === 'SHIPPED') {
+      return {
+        success: false,
+        error: 'Pesanan yang sudah dikirim (SHIPPED) tidak dapat diedit lagi.',
+      };
+    }
+
+    if (order.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: 'Pesanan yang sudah dibatalkan (CANCELLED) tidak dapat diedit.',
+      };
+    }
+
+    // Clean incoming items
+    const cleanItems = items.map((it) => ({
+      id: it.id,
+      productId: it.productId || null,
+      productSku: it.productSku.trim().toUpperCase(),
+      productName: it.productName.trim(),
+      price: Math.max(0, Number(it.price) || 0),
+      quantity: Math.max(1, Number(it.quantity) || 1),
+    }));
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Calculate stock difference for each product involved
+      const oldProductQtyMap = new Map<string, number>();
+      for (const oldIt of order.items) {
+        if (oldIt.productId) {
+          oldProductQtyMap.set(
+            oldIt.productId,
+            (oldProductQtyMap.get(oldIt.productId) || 0) + oldIt.quantity
+          );
+        }
+      }
+
+      const newProductQtyMap = new Map<string, number>();
+      for (const newIt of cleanItems) {
+        if (newIt.productId) {
+          newProductQtyMap.set(
+            newIt.productId,
+            (newProductQtyMap.get(newIt.productId) || 0) + newIt.quantity
+          );
+        }
+      }
+
+      const allProductIds = new Set<string>([
+        ...Array.from(oldProductQtyMap.keys()),
+        ...Array.from(newProductQtyMap.keys()),
+      ]);
+
+      // Adjust stock for each product based on status
+      for (const prodId of allProductIds) {
+        const oldQ = oldProductQtyMap.get(prodId) || 0;
+        const newQ = newProductQtyMap.get(prodId) || 0;
+        const delta = newQ - oldQ; // positive = added, negative = reduced
+
+        if (delta !== 0) {
+          if (order.status === 'HOLD') {
+            if (delta > 0) {
+              await tx.product.update({
+                where: { id: prodId },
+                data: { reservedStock: { increment: delta } },
+              });
+            } else {
+              const reduceBy = Math.abs(delta);
+              await tx.product.update({
+                where: { id: prodId },
+                data: { reservedStock: { decrement: reduceBy } },
+              });
+            }
+          } else if (order.status === 'PAID') {
+            if (delta > 0) {
+              await tx.product.update({
+                where: { id: prodId },
+                data: { physicalStock: { decrement: delta } },
+              });
+              await tx.stockTransaction.create({
+                data: {
+                  productId: prodId,
+                  type: 'ADJUSTMENT_OUT',
+                  quantity: delta,
+                  notes: `Edit Order #${order.orderNumber} (Tambah ${delta} pcs)`,
+                },
+              });
+            } else {
+              const restoreQty = Math.abs(delta);
+              await tx.product.update({
+                where: { id: prodId },
+                data: { physicalStock: { increment: restoreQty } },
+              });
+              await tx.stockTransaction.create({
+                data: {
+                  productId: prodId,
+                  type: 'ADJUSTMENT_IN',
+                  quantity: restoreQty,
+                  notes: `Edit Order #${order.orderNumber} (Kurangi ${restoreQty} pcs)`,
+                },
+              });
+            }
+          }
+        }
+      }
+
+      // 2. Sync OrderItems in DB
+      const keptIds = cleanItems.map((c) => c.id).filter(Boolean) as string[];
+      await tx.orderItem.deleteMany({
+        where: {
+          orderId,
+          ...(keptIds.length > 0 ? { id: { notIn: keptIds } } : {}),
+        },
+      });
+
+      let totalAmount = 0;
+      for (const it of cleanItems) {
+        const subtotal = it.price * it.quantity;
+        totalAmount += subtotal;
+
+        if (it.id) {
+          await tx.orderItem.update({
+            where: { id: it.id },
+            data: {
+              productId: it.productId,
+              productSku: it.productSku,
+              productName: it.productName,
+              price: it.price,
+              quantity: it.quantity,
+              subtotal,
+            },
+          });
+        } else {
+          await tx.orderItem.create({
+            data: {
+              orderId,
+              productId: it.productId,
+              productSku: it.productSku,
+              productName: it.productName,
+              price: it.price,
+              quantity: it.quantity,
+              subtotal,
+            },
+          });
+        }
+      }
+
+      // 3. Update Order record
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          customerName: customerName.trim(),
+          customerPhone: customerPhone ? customerPhone.trim() : null,
+          notes: notes ? notes.trim() : null,
+          totalAmount,
+        },
+      });
+
+      // 4. If status was PAID, also update FinanceTransaction amount
+      if (order.status === 'PAID') {
+        const financeTx = await tx.financeTransaction.findFirst({
+          where: { referenceId: order.orderNumber, category: 'SALES' },
+        });
+        if (financeTx) {
+          await tx.financeTransaction.update({
+            where: { id: financeTx.id },
+            data: {
+              amount: totalAmount,
+              description: `Penjualan Lunas Order #${order.orderNumber} (${customerName.trim()}) [Diperbarui]`,
+            },
+          });
+        }
+      }
+    });
+
+    revalidatePath('/orders');
+    revalidatePath('/products');
+    revalidatePath('/finance');
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error updating order details:', error);
+    return { success: false, error: error.message || 'Gagal menyimpan perubahan order.' };
+  }
+}
+
+

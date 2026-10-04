@@ -17,25 +17,30 @@ import {
   Package,
   X,
   Trash2,
-  Plus
+  Plus,
+  Edit3
 } from 'lucide-react';
 import Link from 'next/link';
 import InvoiceModal, { OrderDetail } from './InvoiceModal';
 import AddItemsModal from './AddItemsModal';
+import EditOrderModal from './EditOrderModal';
+import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
 
 interface OrdersListProps {
   orders: OrderRecord[];
+  products?: ProductItem[];
 }
 
 type DialogType = 'PAY' | 'SHIP' | 'CANCEL' | 'DELETE';
 
-export default function OrdersList({ orders }: OrdersListProps) {
+export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'HOLD' | 'PAID' | 'SHIPPED' | 'CANCELLED'>('ALL');
   const [selectedMonth, setSelectedMonth] = useState<string>('ALL');
   const [selectedYear, setSelectedYear] = useState<string>('ALL');
   const [selectedOrderForInvoice, setSelectedOrderForInvoice] = useState<OrderDetail | null>(null);
+  const [selectedOrderForEdit, setSelectedOrderForEdit] = useState<OrderRecord | null>(null);
   const [addItemsOrder, setAddItemsOrder] = useState<OrderRecord | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -505,6 +510,18 @@ export default function OrdersList({ orders }: OrdersListProps) {
                             <FileText className="w-3.5 h-3.5 text-rose-500" /> Invoice
                           </button>
 
+                          {/* Action: Edit Order (for any order that is HOLD or PAID / not yet shipped) */}
+                          {(order.status === 'HOLD' || order.status === 'PAID') && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedOrderForEdit(order)}
+                              className="px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Edit rincian pesanan, tambah/kurang kuantiti item, atau ubah harga"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Edit
+                            </button>
+                          )}
+
                           {/* Action: Add Items if HOLD */}
                           {order.status === 'HOLD' && (
                             <button
@@ -599,6 +616,16 @@ export default function OrdersList({ orders }: OrdersListProps) {
           isOpen={Boolean(addItemsOrder)}
           onClose={() => setAddItemsOrder(null)}
           order={addItemsOrder}
+        />
+      )}
+
+      {/* Edit Order Modal */}
+      {selectedOrderForEdit && (
+        <EditOrderModal
+          isOpen={Boolean(selectedOrderForEdit)}
+          onClose={() => setSelectedOrderForEdit(null)}
+          order={selectedOrderForEdit}
+          products={products}
         />
       )}
 
