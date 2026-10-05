@@ -19,6 +19,7 @@ import {
   ClipboardPaste,
   ChevronDown,
   Check,
+  Edit3,
 } from 'lucide-react';
 import { ProductItem } from '../products/actions';
 import { createPreOrder } from './actions';
@@ -54,27 +55,47 @@ export default function CreatePreOrderModal({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
+  // Tab State: Default is 'paste'
+  const [activeTab, setActiveTab] = useState<'paste' | 'manual'>('paste');
+
   // WhatsApp quick paste text state
-  const [rawText, setRawText] = useState('');
-  const [showPasteBox, setShowPasteBox] = useState(false);
+  const [rawText, setRawText] = useState(
+`KAK DELLA
+spark flower(4)
+blush sparky(3)
+BW83(3)`
+  );
 
   // Main Form States
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<FormItem[]>([]);
+  const [hasParsedFromPaste, setHasParsedFromPaste] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Open suggestion dropdown for a specific row index
+  // Open suggestion dropdown for a specific row index in manual mode
   const [activeDropdownIndex, setActiveDropdownIndex] = useState<number | null>(null);
 
   // Reset or initialize on open
   useEffect(() => {
     if (isOpen) {
-      if (items.length === 0) {
+      setActiveTab('paste');
+      setError(null);
+      setSuccessMsg(null);
+      setCustomerPhone('');
+      setNotes('');
+      // Auto-parse default text on open
+      const initial = parseWhatsAppStringToItems(rawText);
+      if (initial) {
+        setCustomerName(initial.customer);
+        setItems(initial.items);
+        setHasParsedFromPaste(true);
+      } else {
+        setCustomerName('');
         setItems([
           {
             id: `item-${Date.now()}`,
@@ -85,10 +106,8 @@ export default function CreatePreOrderModal({
             quantityOrdered: 1,
           },
         ]);
+        setHasParsedFromPaste(false);
       }
-      setError(null);
-      setSuccessMsg(null);
-      setShowPasteBox(false);
     }
   }, [isOpen]);
 
@@ -339,12 +358,13 @@ export default function CreatePreOrderModal({
     };
   };
 
-  // Parse WhatsApp Text on button click
-  const handleParseWhatsAppText = () => {
+  // Parse WhatsApp Text on button click or textarea change
+  const handleParseWhatsAppText = (customText?: string) => {
     setError(null);
-    const parsed = parseWhatsAppStringToItems(rawText);
+    const textToParse = typeof customText === 'string' ? customText : rawText;
+    const parsed = parseWhatsAppStringToItems(textToParse);
     if (!parsed) {
-      setError('Teks WhatsApp tidak memiliki format yang valid. Pastikan ada nama customer di baris pertama dan rincian produk di baris berikutnya.');
+      setError('Format teks belum sesuai. Baris 1: Nama Customer, Baris berikutnya: Nama motif / SKU & Jumlah pcs.');
       return;
     }
 
@@ -352,8 +372,8 @@ export default function CreatePreOrderModal({
       setCustomerName(parsed.customer);
     }
     setItems(parsed.items);
-    setShowPasteBox(false);
-    setSuccessMsg(`Berhasil mengisi ${parsed.items.length} produk untuk ${parsed.customer || 'Customer'}!`);
+    setHasParsedFromPaste(true);
+    setSuccessMsg(`Berhasil mem-parse ${parsed.items.length} produk untuk ${parsed.customer || 'Customer'}!`);
     setTimeout(() => setSuccessMsg(null), 3000);
   };
 
@@ -413,14 +433,28 @@ export default function CreatePreOrderModal({
     setError(null);
     setSuccessMsg(null);
 
-    const activeCustomerName = customerName.trim();
+    let activeCustomerName = customerName.trim();
+    let activeItems = [...items];
+
+    // If in paste tab, ensure we process the latest raw text if items aren't yet populated
+    if (activeTab === 'paste' && (!activeCustomerName || activeItems.length === 0 || !hasParsedFromPaste)) {
+      const parsed = parseWhatsAppStringToItems(rawText);
+      if (parsed) {
+        if (!activeCustomerName && parsed.customer) {
+          activeCustomerName = parsed.customer;
+          setCustomerName(parsed.customer);
+        }
+        activeItems = parsed.items;
+        setItems(parsed.items);
+      }
+    }
 
     if (!activeCustomerName) {
-      setError('Nama customer wajib diisi.');
+      setError('Nama customer wajib diisi. Silakan isi Nama Customer di baris pertama teks WhatsApp.');
       return;
     }
 
-    const validItems = items.filter(
+    const validItems = activeItems.filter(
       (it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0
     );
 
@@ -477,7 +511,7 @@ export default function CreatePreOrderModal({
             <div>
               <h2 className="text-base sm:text-lg font-bold">Catat Pre-Order (PO) Baru</h2>
               <p className="text-slate-400 text-xs">
-                Antrean pesanan PO yang akan otomatis terpenuhi saat barang datang di Stok Masuk
+                Pencatatan antrean PO yang otomatis terpotong saat stok masuk dari konveksi
               </p>
             </div>
           </div>
@@ -487,6 +521,32 @@ export default function CreatePreOrderModal({
             type="button"
           >
             <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Tab Navigation: Default is Paste */}
+        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('paste')}
+            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'paste'
+                ? 'bg-white text-indigo-600 border-slate-200 shadow-2xs'
+                : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
+            }`}
+          >
+            <ClipboardPaste className="w-3.5 h-3.5" /> 📋 Paste Chat WhatsApp (Otomatis)
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('manual')}
+            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'manual'
+                ? 'bg-white text-indigo-600 border-slate-200 shadow-2xs'
+                : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5" /> ✍️ Input Manual (Satu Per Satu)
           </button>
         </div>
 
@@ -506,262 +566,326 @@ export default function CreatePreOrderModal({
             </div>
           )}
 
-          {/* Quick Paste Toggle Button */}
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setShowPasteBox(!showPasteBox)}
-              className="px-3.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-100/80 text-indigo-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <ClipboardPaste className="w-3.5 h-3.5" />
-              {showPasteBox ? 'Tutup Kotak Paste Chat WhatsApp' : '📋 Paste Chat WhatsApp (Otomatis Isi Form)'}
-            </button>
-            <span className="text-[11px] text-slate-400">Total {items.length} Baris • {totalQuantity} Pcs</span>
-          </div>
+          {/* TAB 1: PASTE WHATSAPP (DEFAULT) */}
+          {activeTab === 'paste' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-slate-50 border border-indigo-100 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Chat WhatsApp Customer:
+                  </label>
+                  <span className="text-[11px] text-slate-400">
+                    Baris 1 = Nama Customer, Baris berikutnya = Nama Motif/SKU & Qty
+                  </span>
+                </div>
 
-          {/* PASTE WHATSAPP SECTION (COLLAPSIBLE) */}
-          {showPasteBox && (
-            <div className="p-4 bg-slate-50 border border-indigo-100 rounded-xl space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Chat WhatsApp Customer:
-                </label>
-                <span className="text-[11px] text-slate-400">Baris 1 = Nama Customer, Baris berikutnya = Motif/SKU & Qty</span>
+                <textarea
+                  rows={5}
+                  value={rawText}
+                  onChange={(e) => {
+                    setRawText(e.target.value);
+                  }}
+                  placeholder="Contoh format:&#10;KAK DELLA&#10;spark flower(4)&#10;blush sparky(3)&#10;BW83(3)"
+                  className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+
+                <div className="flex justify-between items-center pt-1">
+                  <span className="text-[11px] text-indigo-700 font-medium">
+                    ✨ Klik tombol di samping untuk mengupdate preview jika baru copas teks baru
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleParseWhatsAppText()}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" /> Proses Teks Copas
+                  </button>
+                </div>
               </div>
 
-              <textarea
-                rows={4}
-                value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                placeholder="Contoh format:&#10;KAK DELLA&#10;spark flower(4)&#10;blush sparky(3)&#10;BW83(3)"
-                className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              />
+              {/* Optional Phone & Notes */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-slate-400" /> No. WhatsApp (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: 081234567890"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
 
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowPasteBox(false)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-semibold"
-                >
-                  Batal
-                </button>
-                <button
-                  type="button"
-                  onClick={handleParseWhatsAppText}
-                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" /> Proses & Masukkan ke Form
-                </button>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-slate-400" /> Catatan Pre-Order (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Titip motif cadangan lavender"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Live Parsed Preview Table */}
+              <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <ShoppingBag className="w-3.5 h-3.5 text-indigo-600" /> Hasil Copas: {customerName ? `Customer "${customerName}"` : 'Belum Terdeteksi'}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {items.length} Motif / Produk • {totalQuantity} pcs • Harga Reseller Otomatis
+                    </p>
+                  </div>
+                  <span className="font-mono font-bold text-sm text-indigo-700">
+                    {formatRupiah(totalAmount)}
+                  </span>
+                </div>
+
+                <div className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  {items.map((it, idx) => (
+                    <div key={it.id || idx} className="p-2.5 flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono font-bold text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-800 shrink-0">
+                          {it.productSku}
+                        </span>
+                        <span className="font-semibold text-slate-800 truncate">
+                          {it.productName}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 text-right">
+                        <span className="font-bold text-slate-900 bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
+                          {it.quantityOrdered} pcs
+                        </span>
+                        <span className="text-slate-500 text-[11px]">
+                          @ {formatRupiah(it.price)}
+                        </span>
+                        <span className="font-bold text-slate-900 w-24">
+                          {formatRupiah(it.price * it.quantityOrdered)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
 
-          <form id="create-po-form" onSubmit={handleSubmit} className="space-y-4">
-            {/* Customer Details */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {/* TAB 2: MANUAL INPUT */}
+          {activeTab === 'manual' && (
+            <form id="create-po-manual-form" onSubmit={handleSubmit} className="space-y-4">
+              {/* Customer Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-slate-400" /> Nama Customer <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: KAK DELLA"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-slate-400" /> No. WhatsApp (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: 081234567890"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Catatan PO */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-slate-400" /> Nama Customer <span className="text-rose-500">*</span>
+                  <FileText className="w-3.5 h-3.5 text-slate-400" /> Catatan Pre-Order (Opsional)
                 </label>
                 <input
                   type="text"
-                  placeholder="Contoh: KAK DELLA"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  required
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  placeholder="Contoh: Titip motif cadangan lavender, kirim saat batch Bandung sampai"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                  <Phone className="w-3.5 h-3.5 text-slate-400" /> No. WhatsApp (Opsional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="Contoh: 081234567890"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                />
-              </div>
-            </div>
+              {/* List of PO Items */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <ShoppingBag className="w-3.5 h-3.5 text-indigo-600" /> Rincian Produk Pre-Order ({items.length} Item • {totalQuantity} Pcs)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={handleAddItemRow}
+                    className="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Tambah Baris
+                  </button>
+                </div>
 
-            {/* Catatan PO */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-slate-400" /> Catatan Pre-Order (Opsional)
-              </label>
-              <input
-                type="text"
-                placeholder="Contoh: Titip motif cadangan lavender, kirim saat batch Bandung sampai"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              />
-            </div>
+                <div className="space-y-2.5">
+                  {items.map((row, idx) => {
+                    const filteredMaster = row.productName?.trim()
+                      ? products.filter((p) => {
+                          const q = row.productName.toLowerCase();
+                          return (
+                            p.sku.toLowerCase().includes(q) ||
+                            p.name.toLowerCase().includes(q) ||
+                            (p.motif && p.motif.toLowerCase().includes(q))
+                          );
+                        })
+                      : products.slice(0, 8);
 
-            {/* List of PO Items */}
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                  <ShoppingBag className="w-3.5 h-3.5 text-indigo-600" /> Rincian Produk Pre-Order ({items.length} Item • {totalQuantity} Pcs)
-                </h3>
-                <button
-                  type="button"
-                  onClick={handleAddItemRow}
-                  className="text-xs font-bold px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Tambah Baris
-                </button>
-              </div>
+                    return (
+                      <div
+                        key={row.id || idx}
+                        className="p-3 bg-slate-50/90 rounded-xl border border-slate-200 flex flex-col gap-2 relative"
+                      >
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                          {/* Unified Product / Motif Input with Suggestions */}
+                          <div className="flex-1 w-full relative">
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Nama Produk / Motif PO #{idx + 1}
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="text"
+                                placeholder="Ketik nama motif / produk (cth: Monogram Navy / BW83)..."
+                                value={row.productName}
+                                onFocus={() => setActiveDropdownIndex(idx)}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const updated = [...items];
+                                  updated[idx] = {
+                                    ...updated[idx],
+                                    productName: val,
+                                    productSku: updated[idx].productSku || val.toUpperCase().replace(/\s+/g, '-'),
+                                  };
+                                  setItems(updated);
+                                  recalculateTierPrices(updated);
+                                  setActiveDropdownIndex(idx);
+                                }}
+                                className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
+                              />
 
-              <div className="space-y-2.5">
-                {items.map((row, idx) => {
-                  const filteredMaster = row.productName?.trim()
-                    ? products.filter((p) => {
-                        const q = row.productName.toLowerCase();
-                        return (
-                          p.sku.toLowerCase().includes(q) ||
-                          p.name.toLowerCase().includes(q) ||
-                          (p.motif && p.motif.toLowerCase().includes(q))
-                        );
-                      })
-                    : products.slice(0, 8);
-
-                  return (
-                    <div
-                      key={row.id || idx}
-                      className="p-3 bg-slate-50/90 rounded-xl border border-slate-200 flex flex-col gap-2 relative"
-                    >
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                        {/* Unified Product / Motif Input with Suggestions */}
-                        <div className="flex-1 w-full relative">
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                            Nama Produk / Motif PO #{idx + 1}
-                          </label>
-                          <div className="relative">
-                            <input
-                              type="text"
-                              placeholder="Ketik nama motif / produk (cth: Monogram Navy / BW83)..."
-                              value={row.productName}
-                              onFocus={() => setActiveDropdownIndex(idx)}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                const updated = [...items];
-                                updated[idx] = {
-                                  ...updated[idx],
-                                  productName: val,
-                                  productSku: updated[idx].productSku || val.toUpperCase().replace(/\s+/g, '-'),
-                                };
-                                setItems(updated);
-                                recalculateTierPrices(updated);
-                                setActiveDropdownIndex(idx);
-                              }}
-                              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
-                            />
-
-                            {/* Dropdown Suggestions */}
-                            {activeDropdownIndex === idx && filteredMaster.length > 0 && (
-                              <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-50">
-                                <div className="p-1.5 bg-slate-50 text-[10px] font-semibold text-slate-400 uppercase flex items-center justify-between">
-                                  <span>Pilih dari Master Data</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => setActiveDropdownIndex(null)}
-                                    className="text-slate-400 hover:text-slate-700"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </button>
-                                </div>
-                                {filteredMaster.map((prod) => (
-                                  <div
-                                    key={prod.id}
-                                    onClick={() => handleSelectProduct(idx, prod)}
-                                    className="p-2 hover:bg-indigo-50 cursor-pointer text-xs flex items-center justify-between"
-                                  >
-                                    <div className="truncate">
-                                      <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1 py-0.5 rounded text-[10px] mr-1.5">
-                                        {prod.sku}
-                                      </span>
-                                      <span className="font-medium text-slate-800">
-                                        {prod.name} {prod.motif ? `- ${prod.motif}` : ''}
+                              {/* Dropdown Suggestions */}
+                              {activeDropdownIndex === idx && filteredMaster.length > 0 && (
+                                <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-50">
+                                  <div className="p-1.5 bg-slate-50 text-[10px] font-semibold text-slate-400 uppercase flex items-center justify-between">
+                                    <span>Pilih dari Master Data</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveDropdownIndex(null)}
+                                      className="text-slate-400 hover:text-slate-700"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                  {filteredMaster.map((prod) => (
+                                    <div
+                                      key={prod.id}
+                                      onClick={() => handleSelectProduct(idx, prod)}
+                                      className="p-2 hover:bg-indigo-50 cursor-pointer text-xs flex items-center justify-between"
+                                    >
+                                      <div className="truncate">
+                                        <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1 py-0.5 rounded text-[10px] mr-1.5">
+                                          {prod.sku}
+                                        </span>
+                                        <span className="font-medium text-slate-800">
+                                          {prod.name} {prod.motif ? `- ${prod.motif}` : ''}
+                                        </span>
+                                      </div>
+                                      <span className="text-[10px] text-slate-400 shrink-0">
+                                        Stok: {prod.physicalStock}
                                       </span>
                                     </div>
-                                    <span className="text-[10px] text-slate-400 shrink-0">
-                                      Stok: {prod.physicalStock}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Quantity */}
-                        <div className="w-full sm:w-24">
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                            Qty (Pcs)
-                          </label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={row.quantityOrdered}
-                            onChange={(e) =>
-                              handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
-                            }
-                            className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </div>
-
-                        {/* Price */}
-                        <div className="w-full sm:w-28">
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
-                            Harga Satuan (Rp)
-                          </label>
-                          <div className="relative">
-                            <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                          {/* Quantity */}
+                          <div className="w-full sm:w-24">
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Qty (Pcs)
+                            </label>
                             <input
                               type="number"
-                              min="0"
-                              value={row.price}
+                              min="1"
+                              value={row.quantityOrdered}
                               onChange={(e) =>
-                                handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                                handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
                               }
-                              className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
                             />
                           </div>
-                        </div>
 
-                        {/* Subtotal */}
-                        <div className="w-full sm:w-28 text-right hidden sm:block">
-                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                            Subtotal
-                          </label>
-                          <span className="text-xs font-bold text-slate-900">
-                            {formatRupiah(row.price * row.quantityOrdered)}
-                          </span>
-                        </div>
+                          {/* Price */}
+                          <div className="w-full sm:w-28">
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
+                              Harga Satuan (Rp)
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={row.price}
+                                onChange={(e) =>
+                                  handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                                }
+                                className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+                          </div>
 
-                        {/* Remove */}
-                        <div className="sm:pt-5 shrink-0 self-end sm:self-center">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItemRow(idx)}
-                            disabled={items.length <= 1}
-                            className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
-                            title="Hapus baris"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {/* Subtotal */}
+                          <div className="w-full sm:w-28 text-right hidden sm:block">
+                            <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                              Subtotal
+                            </label>
+                            <span className="text-xs font-bold text-slate-900">
+                              {formatRupiah(row.price * row.quantityOrdered)}
+                            </span>
+                          </div>
+
+                          {/* Remove */}
+                          <div className="sm:pt-5 shrink-0 self-end sm:self-center">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItemRow(idx)}
+                              disabled={items.length <= 1}
+                              className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
+                              title="Hapus baris"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          </form>
+            </form>
+          )}
         </div>
 
         {/* Footer */}
