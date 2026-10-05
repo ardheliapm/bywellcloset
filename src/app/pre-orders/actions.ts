@@ -58,9 +58,90 @@ export interface CreatePreOrderPayload {
   items: CreatePreOrderItemInput[];
 }
 
-// 1. Fetch All Pre-Orders
+// 1. Fetch All Pre-Orders (with auto-reconciliation of available stock)
 export async function getPreOrders(): Promise<PreOrderRecord[]> {
   try {
+    // 1. Check if there are unfulfilled items that can be matched to available warehouse stock
+    const unfulfilledItems = await prisma.preOrderItem.findMany({
+      where: {
+        preOrder: {
+          status: { in: ['WAITING_STOCK', 'PARTIAL_READY'] },
+        },
+      },
+      include: {
+        preOrder: true,
+      },
+    });
+
+    if (unfulfilledItems.length > 0) {
+      const activeProducts = await prisma.product.findMany({
+        where: { isActive: true },
+      });
+
+      for (const prod of activeProducts) {
+        let available = prod.physicalStock - prod.reservedStock;
+        if (available <= 0) continue;
+
+        const cleanSku = prod.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        for (const item of unfulfilledItems) {
+          if (available <= 0) break;
+          if (item.quantityFulfilled >= item.quantityOrdered) continue;
+
+          const itSku = (item.productSku || '').trim().toLowerCase();
+          const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
+          const itName = (item.productName || '').trim().toLowerCase();
+
+          const isMatch =
+            item.productId === prod.id ||
+            itSku === prod.sku.toLowerCase() ||
+            (cleanSku.length >= 2 && itCleanSku === cleanSku) ||
+            itName.includes(prod.sku.toLowerCase()) ||
+            (cleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(cleanSku)) ||
+            (prod.motif && itName.includes(prod.motif.toLowerCase().trim()));
+
+          if (isMatch) {
+            const needed = item.quantityOrdered - item.quantityFulfilled;
+            const alloc = Math.min(available, needed);
+            const newFulfilled = item.quantityFulfilled + alloc;
+            available -= alloc;
+            item.quantityFulfilled = newFulfilled;
+
+            await prisma.preOrderItem.update({
+              where: { id: item.id },
+              data: {
+                quantityFulfilled: newFulfilled,
+                productId: prod.id,
+              },
+            });
+
+            await prisma.product.update({
+              where: { id: prod.id },
+              data: {
+                reservedStock: { increment: alloc },
+              },
+            });
+
+            // Update PO status
+            const siblingItems = await prisma.preOrderItem.findMany({
+              where: { preOrderId: item.preOrderId },
+            });
+
+            const isAllReady = siblingItems.every(
+              (s) => (s.id === item.id ? newFulfilled : s.quantityFulfilled) >= s.quantityOrdered
+            );
+
+            await prisma.preOrder.update({
+              where: { id: item.preOrderId },
+              data: {
+                status: isAllReady ? 'READY' : 'PARTIAL_READY',
+              },
+            });
+          }
+        }
+      }
+    }
+
     const pos = await prisma.preOrder.findMany({
       include: {
         items: {
