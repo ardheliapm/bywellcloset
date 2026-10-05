@@ -294,10 +294,21 @@ export async function updateProduct(
     if (formData.wholesalePrice !== undefined)
       dataToUpdate.wholesalePrice = Math.max(0, Math.floor(Number(formData.wholesalePrice) || 0));
 
-    await prisma.product.update({
+    const updatedProduct = await prisma.product.update({
       where: { id },
       data: dataToUpdate,
     });
+
+    // Auto-allocate if product has available stock to fulfill waiting POs
+    const available = updatedProduct.physicalStock - updatedProduct.reservedStock;
+    if (available > 0) {
+      await prisma.$transaction(
+        async (tx) => {
+          await allocateStockToWaitingPreOrders(tx, updatedProduct, available);
+        },
+        { maxWait: 15000, timeout: 30000 }
+      );
+    }
 
     revalidatePath('/products');
     revalidatePath('/stock-in');

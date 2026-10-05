@@ -43,6 +43,7 @@ export default function ProductList({ products }: ProductListProps) {
 
   // Inline editing state
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSku, setEditSku] = useState('');
   const [editName, setEditName] = useState('');
   const [editMotif, setEditMotif] = useState('');
   const [editColor, setEditColor] = useState('');
@@ -53,6 +54,7 @@ export default function ProductList({ products }: ProductListProps) {
 
   const startEdit = (product: ProductItem) => {
     setEditingId(product.id);
+    setEditSku(product.sku);
     setEditName(product.name);
     setEditMotif(product.motif || '');
     setEditColor(product.color || '');
@@ -67,6 +69,11 @@ export default function ProductList({ products }: ProductListProps) {
   };
 
   const saveEdit = async (id: string) => {
+    if (!editSku.trim()) {
+      setEditError('SKU produk wajib diisi.');
+      return;
+    }
+
     if (!editName.trim()) {
       setEditError('Nama produk wajib diisi.');
       return;
@@ -75,12 +82,15 @@ export default function ProductList({ products }: ProductListProps) {
     setIsSavingEdit(true);
     setEditError(null);
 
+    const skuClean = editSku.trim().toUpperCase();
+
     // Optimistic update in UI
     setProductList((prev) =>
       prev.map((p) =>
         p.id === id
           ? {
               ...p,
+              sku: skuClean,
               name: editName.trim(),
               motif: editMotif.trim() || null,
               color: editColor.trim() || null,
@@ -93,6 +103,7 @@ export default function ProductList({ products }: ProductListProps) {
     );
 
     const res = await updateProduct(id, {
+      sku: skuClean,
       name: editName.trim(),
       motif: editMotif.trim() || undefined,
       color: editColor.trim() || undefined,
@@ -543,9 +554,19 @@ export default function ProductList({ products }: ProductListProps) {
                     >
                       {/* SKU */}
                       <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-xs tracking-wider">
-                          {product.sku}
-                        </span>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={editSku}
+                            onChange={(e) => setEditSku(e.target.value.toUpperCase())}
+                            placeholder="SKU (cth: BW89)"
+                            className="w-24 px-2 py-1 bg-white border border-indigo-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500 uppercase"
+                          />
+                        ) : (
+                          <span className="px-2.5 py-1 rounded-lg bg-slate-100 border border-slate-200 text-xs tracking-wider">
+                            {product.sku}
+                          </span>
+                        )}
                       </td>
 
                       {/* Nama & Motif */}
