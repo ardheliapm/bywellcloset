@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 
 type TransactionClient = Prisma.TransactionClient;
 
-interface ProductReference {
+export interface ProductReference {
   id: string;
   sku: string;
   name: string;
@@ -12,9 +12,54 @@ interface ProductReference {
   reservedStock: number;
 }
 
+export interface ItemReference {
+  productId?: string | null;
+  productSku?: string | null;
+  productName?: string | null;
+}
+
+/**
+ * Strict, accurate matching between a product and a PO item.
+ * Prevents false positives between different motifs/SKUs.
+ */
+export function isProductMatchItem(
+  product: { id: string; sku: string; name: string; motif?: string | null },
+  item: ItemReference
+): boolean {
+  if (item.productId && item.productId === product.id) return true;
+
+  const pSku = (product.sku || '').trim().toLowerCase();
+  const pCleanSku = pSku.replace(/[^a-z0-9]/g, '');
+
+  const itSku = (item.productSku || '').trim().toLowerCase();
+  const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
+
+  const itName = (item.productName || '').trim().toLowerCase();
+  const pMotif = (product.motif || '').trim().toLowerCase();
+
+  // 1. Exact SKU match (e.g. "BW81" === "BW81")
+  if (itSku && pSku && itSku === pSku) return true;
+
+  // 2. Clean alphanumeric SKU exact match (e.g. "BW-81" === "bw81")
+  if (itCleanSku && pCleanSku && pCleanSku.length >= 2 && itCleanSku === pCleanSku) return true;
+
+  // 3. Exact Motif match (e.g. "SPARK FLOWER" === "SPARK FLOWER")
+  if (pMotif && (itSku === pMotif || itName === pMotif)) return true;
+
+  // 4. Exact combined name & motif
+  const pFullName = `${product.name} ${product.motif || ''}`.trim().toLowerCase();
+  if (pFullName && (itName === pFullName || itSku === pFullName)) return true;
+
+  // 5. If item name contains product SKU as an exact token/word (e.g. "BABY TRYSPAN BW81")
+  if (pSku.length >= 3 && (itName === pSku || itName.includes(` ${pSku}`) || itName.includes(`${pSku} `) || itName.startsWith(`${pSku}-`))) {
+    return true;
+  }
+
+  return false;
+}
+
 /**
  * Automatically allocates available physical stock of a product to waiting Pre-Orders (FIFO: oldest PO first).
- * Matches by product ID, SKU (exact & clean alphanumeric, e.g. "BW81" === "bw-81"), motif, or product name.
  */
 export async function allocateStockToWaitingPreOrders(
   tx: TransactionClient,
@@ -27,9 +72,8 @@ export async function allocateStockToWaitingPreOrders(
 
   let remainingQty = availableQtyToAllocate;
   const fulfilledPoNumbers: string[] = [];
-  const cleanSku = product.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-  // 1. Find all waiting Pre-Order items that might match this product
+  // 1. Find all waiting Pre-Order items
   const waitingPoItems = await tx.preOrderItem.findMany({
     where: {
       preOrder: {
@@ -44,38 +88,10 @@ export async function allocateStockToWaitingPreOrders(
     },
   });
 
-  // 2. Filter matching items
+  // 2. Filter strictly matching items
   const matchingItems = waitingPoItems.filter((it) => {
-    // Already fulfilled?
     if (it.quantityFulfilled >= it.quantityOrdered) return false;
-
-    // Explicit product ID match
-    if (it.productId && it.productId === product.id) return true;
-
-    // Exact SKU match (case-insensitive)
-    const itSku = (it.productSku || '').trim().toLowerCase();
-    const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
-    if (itSku === product.sku.toLowerCase() || (cleanSku.length >= 2 && itCleanSku === cleanSku)) {
-      return true;
-    }
-
-    // Name / Motif match in item's productSku or productName
-    const itName = (it.productName || '').trim().toLowerCase();
-    if (
-      itName.includes(product.sku.toLowerCase()) ||
-      (product.motif && itName.includes(product.motif.toLowerCase().trim())) ||
-      (cleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(cleanSku))
-    ) {
-      return true;
-    }
-
-    // Product motif equals item name/sku
-    if (product.motif) {
-      const pMotifClean = product.motif.toLowerCase().trim();
-      if (itSku === pMotifClean || itName === pMotifClean) return true;
-    }
-
-    return false;
+    return isProductMatchItem(product, it);
   });
 
   // 3. Allocate stock FIFO

@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import { isProductMatchItem } from '@/lib/preOrderFulfillment';
 import {
   findProductMasterType,
   calculateProductPrice,
@@ -82,25 +83,11 @@ export async function getPreOrders(): Promise<PreOrderRecord[]> {
         let available = prod.physicalStock - prod.reservedStock;
         if (available <= 0) continue;
 
-        const cleanSku = prod.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
-
         for (const item of unfulfilledItems) {
           if (available <= 0) break;
           if (item.quantityFulfilled >= item.quantityOrdered) continue;
 
-          const itSku = (item.productSku || '').trim().toLowerCase();
-          const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
-          const itName = (item.productName || '').trim().toLowerCase();
-
-          const isMatch =
-            item.productId === prod.id ||
-            itSku === prod.sku.toLowerCase() ||
-            (cleanSku.length >= 2 && itCleanSku === cleanSku) ||
-            itName.includes(prod.sku.toLowerCase()) ||
-            (cleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(cleanSku)) ||
-            (prod.motif && itName.includes(prod.motif.toLowerCase().trim()));
-
-          if (isMatch) {
+          if (isProductMatchItem(prod, item)) {
             const needed = item.quantityOrdered - item.quantityFulfilled;
             const alloc = Math.min(available, needed);
             const newFulfilled = item.quantityFulfilled + alloc;
@@ -223,25 +210,8 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
           let fulfilledNow = 0;
           let matchedProdId = it.productId;
 
-          const itCleanSku = (it.productSku || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-          const itName = (it.productName || '').toLowerCase().trim();
-
-          // Match product by ID, SKU, clean SKU, or motif/name
-          const prod = allActiveProducts.find((p) => {
-            if (matchedProdId && p.id === matchedProdId) return true;
-            const pSku = p.sku.toLowerCase();
-            const pCleanSku = pSku.replace(/[^a-z0-9]/g, '');
-            if (pSku === it.productSku.toLowerCase() || (itCleanSku.length >= 2 && pCleanSku === itCleanSku)) {
-              return true;
-            }
-            if (p.motif && itName.includes(p.motif.toLowerCase().trim())) {
-              return true;
-            }
-            if (itName.includes(pSku) || (itCleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(itCleanSku))) {
-              return true;
-            }
-            return false;
-          });
+          // Strictly match product by ID or exact SKU/motif
+          const prod = allActiveProducts.find((p) => isProductMatchItem(p, it));
 
           if (prod) {
             matchedProdId = prod.id;
@@ -580,19 +550,7 @@ export async function reconcileAllWaitingPreOrders() {
             if (remainingAvailable <= 0) break;
             if (item.quantityFulfilled >= item.quantityOrdered) continue;
 
-            const itSku = (item.productSku || '').trim().toLowerCase();
-            const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
-            const itName = (item.productName || '').trim().toLowerCase();
-
-            const isMatch =
-              item.productId === prod.id ||
-              itSku === prod.sku.toLowerCase() ||
-              (cleanSku.length >= 2 && itCleanSku === cleanSku) ||
-              itName.includes(prod.sku.toLowerCase()) ||
-              (cleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(cleanSku)) ||
-              (prod.motif && itName.includes(prod.motif.toLowerCase().trim()));
-
-            if (isMatch) {
+            if (isProductMatchItem(prod, item)) {
               const needed = item.quantityOrdered - item.quantityFulfilled;
               const alloc = Math.min(remainingAvailable, needed);
               const newFulfilled = item.quantityFulfilled + alloc;
