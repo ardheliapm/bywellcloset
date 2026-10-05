@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Download, Upload, FileSpreadsheet, Trash2, Layers, Edit3, Check, X, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import AddProductModal from './AddProductModal';
@@ -17,6 +18,15 @@ type SortOption = 'NEWEST' | 'STOCK_DESC' | 'STOCK_ASC';
 type StockAlertFilter = 'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 
 export default function ProductList({ products }: ProductListProps) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const [productList, setProductList] = useState<ProductItem[]>(products);
+
+  useEffect(() => {
+    setProductList(products);
+  }, [products]);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isManageTypesOpen, setIsManageTypesOpen] = useState(false);
@@ -65,6 +75,23 @@ export default function ProductList({ products }: ProductListProps) {
     setIsSavingEdit(true);
     setEditError(null);
 
+    // Optimistic update in UI
+    setProductList((prev) =>
+      prev.map((p) =>
+        p.id === id
+          ? {
+              ...p,
+              name: editName.trim(),
+              motif: editMotif.trim() || null,
+              color: editColor.trim() || null,
+              costPrice: editCostPrice,
+              sellingPrice: editSellingPrice,
+              wholesalePrice: editSellingPrice,
+            }
+          : p
+      )
+    );
+
     const res = await updateProduct(id, {
       name: editName.trim(),
       motif: editMotif.trim() || undefined,
@@ -78,8 +105,13 @@ export default function ProductList({ products }: ProductListProps) {
 
     if (res.success) {
       setEditingId(null);
+      startTransition(() => {
+        router.refresh();
+      });
     } else {
       setEditError(res.error || 'Gagal menyimpan perubahan');
+      // Revert if error
+      setProductList(products);
     }
   };
 
@@ -105,23 +137,23 @@ export default function ProductList({ products }: ProductListProps) {
 
   // Ambil daftar unik Nama Produk secara dinamis untuk pilihan dropdown filter
   const uniqueNames = useMemo(() => {
-    const fromProducts = products.map((p) => p.name);
+    const fromProducts = productList.map((p) => p.name);
     const fromMaster = masterTypes.map((t) => t.name);
     return Array.from(new Set([...fromMaster, ...fromProducts])).filter(Boolean).sort();
-  }, [products, masterTypes]);
+  }, [productList, masterTypes]);
 
   // Hitung jumlah produk stok menipis (<= 5) dan habis (= 0)
   const lowStockCount = useMemo(() => {
-    return products.filter((p) => p.availableStock > 0 && p.availableStock <= 5).length;
-  }, [products]);
+    return productList.filter((p) => p.availableStock > 0 && p.availableStock <= 5).length;
+  }, [productList]);
 
   const outOfStockCount = useMemo(() => {
-    return products.filter((p) => p.availableStock === 0).length;
-  }, [products]);
+    return productList.filter((p) => p.availableStock === 0).length;
+  }, [productList]);
 
   // Proses Filter Data
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
+    return productList.filter((p) => {
       // 1. Search Bar
       const matchesSearch =
         p.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -150,7 +182,7 @@ export default function ProductList({ products }: ProductListProps) {
 
       return matchesSearch && matchesStatus && matchesName && matchesStockAlert;
     });
-  }, [products, searchTerm, statusFilter, nameFilter, stockAlertFilter]);
+  }, [productList, searchTerm, statusFilter, nameFilter, stockAlertFilter]);
 
   // Proses Sorting Data
   const sortedProducts = useMemo(() => {
