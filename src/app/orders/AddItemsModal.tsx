@@ -474,22 +474,6 @@ export default function AddItemsModal({ isOpen, onClose, order }: AddItemsModalP
 
             {/* Content Area */}
             <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1 min-h-0">
-              {/* Reseller Tier Info Badge */}
-              <div className="p-3 bg-violet-50/70 border border-violet-200 rounded-xl text-xs space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-violet-900 flex items-center gap-1.5">
-                    <Tag className="w-4 h-4 text-violet-600" />
-                    Tier Reseller BABY TRYSPAN: {combinedResellerQty} pcs $\rightarrow$ {formatRupiah(resellerTierUnitPrice)} / pcs
-                  </span>
-                  <span className="text-[11px] text-violet-700">
-                    Total Order Nanti: {existingTotalQty + newTotalQty} pcs
-                  </span>
-                </div>
-                <p className="text-[11px] text-violet-600">
-                  *Item <strong>BABY TRYSPAN</strong> dikenakan harga tier reseller ({formatRupiah(resellerTierUnitPrice)}), sedangkan <strong>PARIS JAPAN</strong> tetap dengan harga normal.
-                </p>
-              </div>
-
               {error && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" />
