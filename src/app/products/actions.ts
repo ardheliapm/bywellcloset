@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import { allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
 
 export interface ProductItem {
   id: string;
@@ -100,7 +101,7 @@ export async function createProduct(formData: {
       },
     });
 
-    // If initial physicalStock > 0, log a stock_in transaction automatically
+    // If initial physicalStock > 0, log stock transaction and allocate to waiting POs
     if (newProduct.physicalStock > 0) {
       await prisma.stockTransaction.create({
         data: {
@@ -110,9 +111,18 @@ export async function createProduct(formData: {
           notes: 'Stok awal saat pendaftaran produk',
         },
       });
+
+      // Auto-allocate to waiting Pre-Orders
+      await prisma.$transaction(
+        async (tx) => {
+          await allocateStockToWaitingPreOrders(tx, newProduct, newProduct.physicalStock);
+        },
+        { maxWait: 15000, timeout: 30000 }
+      );
     }
 
     revalidatePath('/products');
+    revalidatePath('/pre-orders');
     revalidatePath('/stock-in');
     revalidatePath('/paste-order');
     revalidatePath('/finance');

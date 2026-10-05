@@ -131,32 +131,50 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
         let totalOrderedPcs = 0;
         let totalFulfilledPcs = 0;
 
-        // Fetch products upfront to avoid multiple round-trips
-        const productIds = cleanItems.map((it) => it.productId).filter(Boolean) as string[];
-        const existingProducts = productIds.length > 0
-          ? await tx.product.findMany({ where: { id: { in: productIds } } })
-          : [];
-        const prodMap = new Map(existingProducts.map((p) => [p.id, p]));
+        // Fetch all active products to match by ID, SKU, or Name
+        const allActiveProducts = await tx.product.findMany({
+          where: { isActive: true },
+        });
 
         const preparedItems = [];
 
         for (const it of cleanItems) {
           let fulfilledNow = 0;
+          let matchedProdId = it.productId;
 
-          // Check if there is existing available stock in warehouse right now
-          if (it.productId && prodMap.has(it.productId)) {
-            const prod = prodMap.get(it.productId)!;
+          const itCleanSku = (it.productSku || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const itName = (it.productName || '').toLowerCase().trim();
+
+          // Match product by ID, SKU, clean SKU, or motif/name
+          const prod = allActiveProducts.find((p) => {
+            if (matchedProdId && p.id === matchedProdId) return true;
+            const pSku = p.sku.toLowerCase();
+            const pCleanSku = pSku.replace(/[^a-z0-9]/g, '');
+            if (pSku === it.productSku.toLowerCase() || (itCleanSku.length >= 2 && pCleanSku === itCleanSku)) {
+              return true;
+            }
+            if (p.motif && itName.includes(p.motif.toLowerCase().trim())) {
+              return true;
+            }
+            if (itName.includes(pSku) || (itCleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(itCleanSku))) {
+              return true;
+            }
+            return false;
+          });
+
+          if (prod) {
+            matchedProdId = prod.id;
             const availableNow = Math.max(0, prod.physicalStock - prod.reservedStock);
             if (availableNow > 0) {
               fulfilledNow = Math.min(it.quantityOrdered, availableNow);
               // Hold that stock for this PO
               await tx.product.update({
-                where: { id: it.productId },
+                where: { id: prod.id },
                 data: {
                   reservedStock: { increment: fulfilledNow },
                 },
               });
-              // Update local state in map for subsequent items of same product
+              // Update local state in object for subsequent items of same product
               prod.reservedStock += fulfilledNow;
             }
           }
@@ -167,7 +185,7 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
           totalFulfilledPcs += fulfilledNow;
 
           preparedItems.push({
-            productId: it.productId,
+            productId: matchedProdId,
             productSku: it.productSku,
             productName: it.productName,
             price: it.price,
@@ -446,3 +464,106 @@ export async function deletePreOrder(poId: string) {
     return { success: false, error: error.message || 'Gagal menghapus Pre-Order' };
   }
 }
+
+// 6. Reconcile All Waiting Pre-Orders against Available Warehouse Stock
+export async function reconcileAllWaitingPreOrders() {
+  try {
+    const products = await prisma.product.findMany({
+      where: { isActive: true },
+    });
+
+    let totalAllocated = 0;
+
+    await prisma.$transaction(
+      async (tx) => {
+        for (const prod of products) {
+          const available = prod.physicalStock - prod.reservedStock;
+          if (available <= 0) continue;
+
+          const cleanSku = prod.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+          // Find waiting items for this product
+          const waitingItems = await tx.preOrderItem.findMany({
+            where: {
+              preOrder: {
+                status: { in: ['WAITING_STOCK', 'PARTIAL_READY'] },
+              },
+            },
+            include: { preOrder: true },
+            orderBy: { createdAt: 'asc' },
+          });
+
+          let remainingAvailable = available;
+
+          for (const item of waitingItems) {
+            if (remainingAvailable <= 0) break;
+            if (item.quantityFulfilled >= item.quantityOrdered) continue;
+
+            const itSku = (item.productSku || '').trim().toLowerCase();
+            const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
+            const itName = (item.productName || '').trim().toLowerCase();
+
+            const isMatch =
+              item.productId === prod.id ||
+              itSku === prod.sku.toLowerCase() ||
+              (cleanSku.length >= 2 && itCleanSku === cleanSku) ||
+              itName.includes(prod.sku.toLowerCase()) ||
+              (cleanSku.length >= 3 && itName.replace(/[^a-z0-9]/g, '').includes(cleanSku)) ||
+              (prod.motif && itName.includes(prod.motif.toLowerCase().trim()));
+
+            if (isMatch) {
+              const needed = item.quantityOrdered - item.quantityFulfilled;
+              const alloc = Math.min(remainingAvailable, needed);
+              const newFulfilled = item.quantityFulfilled + alloc;
+              remainingAvailable -= alloc;
+              totalAllocated += alloc;
+
+              await tx.preOrderItem.update({
+                where: { id: item.id },
+                data: {
+                  quantityFulfilled: newFulfilled,
+                  productId: prod.id,
+                },
+              });
+
+              await tx.product.update({
+                where: { id: prod.id },
+                data: {
+                  reservedStock: { increment: alloc },
+                },
+              });
+
+              // Check sibling items
+              const siblingItems = await tx.preOrderItem.findMany({
+                where: { preOrderId: item.preOrderId },
+              });
+
+              const isAllReady = siblingItems.every(
+                (s) => (s.id === item.id ? newFulfilled : s.quantityFulfilled) >= s.quantityOrdered
+              );
+
+              await tx.preOrder.update({
+                where: { id: item.preOrderId },
+                data: {
+                  status: isAllReady ? 'READY' : 'PARTIAL_READY',
+                },
+              });
+            }
+          }
+        }
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
+
+    revalidatePath('/pre-orders');
+    revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/');
+
+    return { success: true, totalAllocated };
+  } catch (error: any) {
+    console.error('Error reconciling pre-orders:', error);
+    return { success: false, error: error.message || 'Gagal merekonsiliasi antrean PO' };
+  }
+}
+
