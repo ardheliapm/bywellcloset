@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useTransition, useMemo } from 'react';
-import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight, Printer } from 'lucide-react';
+import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight, Printer, Sparkles } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
 import { FinanceSummaryData, FinanceTransactionRecord, addFinanceTransaction, updateFinanceTransaction, deleteFinanceTransaction, getFinanceSummary } from './actions';
 import FinanceReportModal from './FinanceReportModal';
@@ -103,6 +103,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
   };
 
   const monthsList = [
+    { value: -1, label: '⚡ Hari Ini (Live Real-Time)' },
     { value: 0, label: 'Semua Bulan (Rekap 1 Tahun)' },
     { value: 1, label: 'Januari' },
     { value: 2, label: 'Februari' },
@@ -131,6 +132,7 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
   }, [summary.availableYears, selectedYear]);
 
   const selectedPeriodLabel = useMemo(() => {
+    if (selectedMonth === -1) return `Hari Ini (${new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })})`;
     if (selectedMonth === 0) return `Rekap Tahun ${selectedYear}`;
     const found = monthsList.find((m) => m.value === selectedMonth);
     return found ? `${found.label} ${selectedYear}` : `${selectedYear}`;
@@ -626,12 +628,67 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
         </div>
       </div>
 
+      {/* Today Real-Time Highlight Bar */}
+      <div className="bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 rounded-2xl p-4 sm:p-5 text-white shadow-md flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 border border-emerald-500/20">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-white">Laba Rugi & Keuangan Hari Ini</h3>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500 text-slate-950 uppercase tracking-wider">Live Real-Time</span>
+            </div>
+            <p className="text-xs text-slate-300">
+              {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 sm:gap-6 flex-wrap w-full lg:w-auto justify-between lg:justify-end">
+          <div>
+            <span className="text-[11px] text-slate-400 block">Omset Hari Ini</span>
+            <strong className="text-sm sm:text-base font-bold text-emerald-400 font-mono">
+              {formatRupiah(summary.todayIncome || 0)}
+            </strong>
+          </div>
+          <div className="h-8 w-px bg-slate-800 hidden sm:block" />
+          <div>
+            <span className="text-[11px] text-slate-400 block">Laba Kotor Hari Ini</span>
+            <strong className="text-sm sm:text-base font-bold text-indigo-300 font-mono">
+              {formatRupiah(summary.todayGrossProfit || 0)}
+            </strong>
+          </div>
+          <div className="h-8 w-px bg-slate-800 hidden sm:block" />
+          <div>
+            <span className="text-[11px] text-slate-400 block">Pengeluaran Hari Ini</span>
+            <strong className="text-sm sm:text-base font-bold text-rose-400 font-mono">
+              {formatRupiah(summary.todayExpenses || 0)}
+            </strong>
+          </div>
+          <div className="h-8 w-px bg-slate-800 hidden sm:block" />
+          <div>
+            <span className="text-[11px] text-slate-400 block">Laba Bersih Hari Ini</span>
+            <strong className="text-base sm:text-lg font-black text-amber-300 font-mono">
+              {formatRupiah(summary.todayNetProfit || 0)}
+            </strong>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleFilterChange(-1, new Date().getFullYear())}
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-xs font-bold border border-emerald-500/30 transition-colors cursor-pointer"
+          >
+            Filter Hari Ini &rarr;
+          </button>
+        </div>
+      </div>
+
       {/* KPI Cards: P&L Breakdown */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Total Omset (Income) */}
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Omset Penjualan</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Omset ({selectedPeriodLabel})</p>
             <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <ArrowUpRight className="w-4 h-4" />
             </div>

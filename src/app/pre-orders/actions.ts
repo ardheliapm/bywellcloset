@@ -125,23 +125,27 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
       return { success: false, error: 'Minimal harus ada 1 produk yang valid dalam PO.' };
     }
 
-    const result = await prisma.$transaction(async (tx) => {
-      let totalAmount = 0;
-      let totalOrderedPcs = 0;
-      let totalFulfilledPcs = 0;
+    const result = await prisma.$transaction(
+      async (tx) => {
+        let totalAmount = 0;
+        let totalOrderedPcs = 0;
+        let totalFulfilledPcs = 0;
 
-      const preparedItems = [];
+        // Fetch products upfront to avoid multiple round-trips
+        const productIds = cleanItems.map((it) => it.productId).filter(Boolean) as string[];
+        const existingProducts = productIds.length > 0
+          ? await tx.product.findMany({ where: { id: { in: productIds } } })
+          : [];
+        const prodMap = new Map(existingProducts.map((p) => [p.id, p]));
 
-      for (const it of cleanItems) {
-        let fulfilledNow = 0;
+        const preparedItems = [];
 
-        // Check if there is existing available stock in warehouse right now
-        if (it.productId) {
-          const prod = await tx.product.findUnique({
-            where: { id: it.productId },
-          });
+        for (const it of cleanItems) {
+          let fulfilledNow = 0;
 
-          if (prod) {
+          // Check if there is existing available stock in warehouse right now
+          if (it.productId && prodMap.has(it.productId)) {
+            const prod = prodMap.get(it.productId)!;
             const availableNow = Math.max(0, prod.physicalStock - prod.reservedStock);
             if (availableNow > 0) {
               fulfilledNow = Math.min(it.quantityOrdered, availableNow);
@@ -152,51 +156,54 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
                   reservedStock: { increment: fulfilledNow },
                 },
               });
+              // Update local state in map for subsequent items of same product
+              prod.reservedStock += fulfilledNow;
             }
           }
+
+          const subtotal = Math.floor(it.price * it.quantityOrdered);
+          totalAmount += subtotal;
+          totalOrderedPcs += it.quantityOrdered;
+          totalFulfilledPcs += fulfilledNow;
+
+          preparedItems.push({
+            productId: it.productId,
+            productSku: it.productSku,
+            productName: it.productName,
+            price: it.price,
+            quantityOrdered: it.quantityOrdered,
+            quantityFulfilled: fulfilledNow,
+            quantityShipped: 0,
+            subtotal,
+          });
         }
 
-        const subtotal = Math.floor(it.price * it.quantityOrdered);
-        totalAmount += subtotal;
-        totalOrderedPcs += it.quantityOrdered;
-        totalFulfilledPcs += fulfilledNow;
+        // Determine initial status
+        let status = 'WAITING_STOCK';
+        if (totalFulfilledPcs === totalOrderedPcs && totalOrderedPcs > 0) {
+          status = 'READY';
+        } else if (totalFulfilledPcs > 0) {
+          status = 'PARTIAL_READY';
+        }
 
-        preparedItems.push({
-          productId: it.productId,
-          productSku: it.productSku,
-          productName: it.productName,
-          price: it.price,
-          quantityOrdered: it.quantityOrdered,
-          quantityFulfilled: fulfilledNow,
-          quantityShipped: 0,
-          subtotal,
-        });
-      }
-
-      // Determine initial status
-      let status = 'WAITING_STOCK';
-      if (totalFulfilledPcs === totalOrderedPcs && totalOrderedPcs > 0) {
-        status = 'READY';
-      } else if (totalFulfilledPcs > 0) {
-        status = 'PARTIAL_READY';
-      }
-
-      const newPo = await tx.preOrder.create({
-        data: {
-          poNumber,
-          customerName: customerName.trim(),
-          customerPhone: customerPhone ? customerPhone.trim() : null,
-          status,
-          totalAmount,
-          notes: notes ? notes.trim() : null,
-          items: {
-            create: preparedItems,
+        const newPo = await tx.preOrder.create({
+          data: {
+            poNumber,
+            customerName: customerName.trim(),
+            customerPhone: customerPhone ? customerPhone.trim() : null,
+            status,
+            totalAmount,
+            notes: notes ? notes.trim() : null,
+            items: {
+              create: preparedItems,
+            },
           },
-        },
-      });
+        });
 
-      return newPo;
-    });
+        return newPo;
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
 
     revalidatePath('/pre-orders');
     revalidatePath('/stock-in');
@@ -244,100 +251,103 @@ export async function shipPreOrderItems(
       return { success: false, error: 'Pilih minimal 1 pcs barang yang ready untuk dikirim.' };
     }
 
-    await prisma.$transaction(async (tx) => {
-      let shipmentTotalAmount = 0;
-      let totalPcsShippedNow = 0;
+    await prisma.$transaction(
+      async (tx) => {
+        let shipmentTotalAmount = 0;
+        let totalPcsShippedNow = 0;
 
-      for (const ship of validShipments) {
-        const item = po.items.find((it) => it.id === ship.itemId);
-        if (!item) continue;
+        for (const ship of validShipments) {
+          const item = po.items.find((it) => it.id === ship.itemId);
+          if (!item) continue;
 
-        const maxShippable = item.quantityFulfilled - item.quantityShipped;
-        const qtyToShip = Math.min(ship.quantityToShip, maxShippable);
+          const maxShippable = item.quantityFulfilled - item.quantityShipped;
+          const qtyToShip = Math.min(ship.quantityToShip, maxShippable);
 
-        if (qtyToShip <= 0) continue;
+          if (qtyToShip <= 0) continue;
 
-        const updatedShipped = item.quantityShipped + qtyToShip;
-        totalPcsShippedNow += qtyToShip;
-        shipmentTotalAmount += item.price * qtyToShip;
+          const updatedShipped = item.quantityShipped + qtyToShip;
+          totalPcsShippedNow += qtyToShip;
+          shipmentTotalAmount += item.price * qtyToShip;
 
-        // 1. Update PreOrderItem
-        await tx.preOrderItem.update({
-          where: { id: item.id },
-          data: {
-            quantityShipped: updatedShipped,
-          },
-        });
-
-        // 2. Reduce physicalStock & reservedStock in Product
-        if (item.productId) {
-          await tx.product.update({
-            where: { id: item.productId },
+          // 1. Update PreOrderItem
+          await tx.preOrderItem.update({
+            where: { id: item.id },
             data: {
-              physicalStock: { decrement: qtyToShip },
-              reservedStock: { decrement: qtyToShip },
+              quantityShipped: updatedShipped,
             },
           });
 
-          // Log stock transaction
-          await tx.stockTransaction.create({
+          // 2. Reduce physicalStock & reservedStock in Product
+          if (item.productId) {
+            await tx.product.update({
+              where: { id: item.productId },
+              data: {
+                physicalStock: { decrement: qtyToShip },
+                reservedStock: { decrement: qtyToShip },
+              },
+            });
+
+            // Log stock transaction
+            await tx.stockTransaction.create({
+              data: {
+                productId: item.productId,
+                type: 'ADJUSTMENT_OUT',
+                quantity: qtyToShip,
+                notes: `Pengiriman PO #${po.poNumber} (${po.customerName})`,
+              },
+            });
+          }
+        }
+
+        // 3. Check overall PO fulfillment & shipment status
+        const allUpdatedItems = await tx.preOrderItem.findMany({
+          where: { preOrderId: poId },
+        });
+
+        const isAllFullyShipped = allUpdatedItems.every(
+          (it) => it.quantityShipped >= it.quantityOrdered
+        );
+
+        const isAllReady = allUpdatedItems.every(
+          (it) => it.quantityFulfilled >= it.quantityOrdered
+        );
+
+        const hasSomeFulfilled = allUpdatedItems.some((it) => it.quantityFulfilled > 0);
+        const hasSomeShipped = allUpdatedItems.some((it) => it.quantityShipped > 0);
+
+        let nextStatus = po.status;
+        if (isAllFullyShipped) {
+          nextStatus = 'SHIPPED';
+        } else if (hasSomeShipped) {
+          nextStatus = isAllReady ? 'READY' : 'PARTIAL_READY';
+        } else if (isAllReady) {
+          nextStatus = 'READY';
+        } else if (hasSomeFulfilled) {
+          nextStatus = 'PARTIAL_READY';
+        }
+
+        await tx.preOrder.update({
+          where: { id: poId },
+          data: {
+            status: nextStatus,
+          },
+        });
+
+        // 4. Record Finance Income Transaction for this shipment
+        if (shipmentTotalAmount > 0) {
+          await tx.financeTransaction.create({
             data: {
-              productId: item.productId,
-              type: 'ADJUSTMENT_OUT',
-              quantity: qtyToShip,
-              notes: `Pengiriman PO #${po.poNumber} (${po.customerName})`,
+              type: 'INCOME',
+              category: 'SALES',
+              amount: shipmentTotalAmount,
+              description: `Pengiriman PO #${po.poNumber} (${po.customerName}) - ${totalPcsShippedNow} pcs${shippingNotes ? ` [${shippingNotes}]` : ''}`,
+              referenceId: po.poNumber,
             },
           });
         }
-      }
-
-      // 3. Check overall PO fulfillment & shipment status
-      const allUpdatedItems = await tx.preOrderItem.findMany({
-        where: { preOrderId: poId },
-      });
-
-      const isAllFullyShipped = allUpdatedItems.every(
-        (it) => it.quantityShipped >= it.quantityOrdered
-      );
-
-      const isAllReady = allUpdatedItems.every(
-        (it) => it.quantityFulfilled >= it.quantityOrdered
-      );
-
-      const hasSomeFulfilled = allUpdatedItems.some((it) => it.quantityFulfilled > 0);
-      const hasSomeShipped = allUpdatedItems.some((it) => it.quantityShipped > 0);
-
-      let nextStatus = po.status;
-      if (isAllFullyShipped) {
-        nextStatus = 'SHIPPED';
-      } else if (hasSomeShipped) {
-        nextStatus = isAllReady ? 'READY' : 'PARTIAL_READY';
-      } else if (isAllReady) {
-        nextStatus = 'READY';
-      } else if (hasSomeFulfilled) {
-        nextStatus = 'PARTIAL_READY';
-      }
-
-      await tx.preOrder.update({
-        where: { id: poId },
-        data: {
-          status: nextStatus,
-        },
-      });
-
-      // 4. Record Finance Income Transaction for this shipment
-      if (shipmentTotalAmount > 0) {
-        await tx.financeTransaction.create({
-          data: {
-            type: 'INCOME',
-            category: 'SALES',
-            amount: shipmentTotalAmount,
-            description: `Pengiriman PO #${po.poNumber} (${po.customerName}) - ${totalPcsShippedNow} pcs${shippingNotes ? ` [${shippingNotes}]` : ''}`,
-            referenceId: po.poNumber,
-          },
-        });
-      }
-    });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
 
     revalidatePath('/pre-orders');
     revalidatePath('/products');
@@ -371,27 +381,30 @@ export async function cancelPreOrder(poId: string) {
       return { success: false, error: 'PO yang sudah dikirim semua tidak dapat dibatalkan.' };
     }
 
-    await prisma.$transaction(async (tx) => {
-      // Release any fulfilled but not yet shipped stock
-      for (const it of po.items) {
-        const heldQty = it.quantityFulfilled - it.quantityShipped;
-        if (heldQty > 0 && it.productId) {
-          await tx.product.update({
-            where: { id: it.productId },
-            data: {
-              reservedStock: { decrement: heldQty },
-            },
-          });
+    await prisma.$transaction(
+      async (tx) => {
+        // Release any fulfilled but not yet shipped stock
+        for (const it of po.items) {
+          const heldQty = it.quantityFulfilled - it.quantityShipped;
+          if (heldQty > 0 && it.productId) {
+            await tx.product.update({
+              where: { id: it.productId },
+              data: {
+                reservedStock: { decrement: heldQty },
+              },
+            });
+          }
         }
-      }
 
-      await tx.preOrder.update({
-        where: { id: poId },
-        data: {
-          status: 'CANCELLED',
-        },
-      });
-    });
+        await tx.preOrder.update({
+          where: { id: poId },
+          data: {
+            status: 'CANCELLED',
+          },
+        });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
 
     revalidatePath('/pre-orders');
     revalidatePath('/products');

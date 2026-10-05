@@ -244,6 +244,63 @@ export async function toggleProductStatus(id: string, currentStatus: boolean) {
   }
 }
 
+export async function updateProduct(
+  id: string,
+  formData: {
+    sku?: string;
+    name?: string;
+    motif?: string;
+    color?: string;
+    costPrice?: number;
+    sellingPrice?: number;
+    wholesalePrice?: number;
+  }
+) {
+  try {
+    const existing = await prisma.product.findUnique({ where: { id } });
+    if (!existing) return { success: false, error: 'Produk tidak ditemukan.' };
+
+    const dataToUpdate: any = {};
+    if (formData.sku !== undefined) {
+      const skuClean = formData.sku.trim().toUpperCase();
+      if (!skuClean) return { success: false, error: 'SKU tidak boleh kosong.' };
+      if (skuClean !== existing.sku) {
+        const dup = await prisma.product.findUnique({ where: { sku: skuClean } });
+        if (dup) return { success: false, error: `SKU "${skuClean}" sudah digunakan produk lain.` };
+      }
+      dataToUpdate.sku = skuClean;
+    }
+    if (formData.name !== undefined) {
+      const nameClean = formData.name.trim();
+      if (!nameClean) return { success: false, error: 'Nama produk tidak boleh kosong.' };
+      dataToUpdate.name = nameClean;
+    }
+    if (formData.motif !== undefined) dataToUpdate.motif = formData.motif?.trim() || null;
+    if (formData.color !== undefined) dataToUpdate.color = formData.color?.trim() || null;
+    if (formData.costPrice !== undefined)
+      dataToUpdate.costPrice = Math.max(0, Math.floor(Number(formData.costPrice) || 0));
+    if (formData.sellingPrice !== undefined)
+      dataToUpdate.sellingPrice = Math.max(0, Math.floor(Number(formData.sellingPrice) || 0));
+    if (formData.wholesalePrice !== undefined)
+      dataToUpdate.wholesalePrice = Math.max(0, Math.floor(Number(formData.wholesalePrice) || 0));
+
+    await prisma.product.update({
+      where: { id },
+      data: dataToUpdate,
+    });
+
+    revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/paste-order');
+    revalidatePath('/pre-orders');
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error updating product:', error);
+    return { success: false, error: error.message || 'Gagal mengubah data produk.' };
+  }
+}
+
 export async function deleteProduct(id: string) {
   try {
     const product = await prisma.product.findUnique({

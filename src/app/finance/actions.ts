@@ -33,6 +33,11 @@ export interface FinanceSummaryData {
   grossProfit: number;
   totalExpenses: number;
   netProfit: number;
+  todayIncome?: number;
+  todayCOGS?: number;
+  todayGrossProfit?: number;
+  todayExpenses?: number;
+  todayNetProfit?: number;
   transactions: FinanceTransactionRecord[];
   paidOrders: PaidOrderSummary[];
   availableYears: number[];
@@ -42,11 +47,16 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
   try {
     const selectedYear = year || new Date().getFullYear();
     const isAllMonths = month === 0;
+    const isToday = month === -1;
 
     let startDate: Date;
     let endDate: Date;
 
-    if (isAllMonths) {
+    if (isToday) {
+      const now = new Date();
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    } else if (isAllMonths) {
       startDate = new Date(selectedYear, 0, 1, 0, 0, 0, 0);
       endDate = new Date(selectedYear, 11, 31, 23, 59, 59, 999);
     } else {
@@ -123,7 +133,43 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
     const grossProfit = totalIncome - totalCOGS;
     const netProfit = grossProfit - totalExpenses;
 
-    // 4. Fetch dynamic available years from database timestamp
+    // 4. Calculate today's real-time metrics
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+    const [todayTxs, todayPaidOrders] = await Promise.all([
+      prisma.financeTransaction.findMany({
+        where: { transactionDate: { gte: todayStart, lte: todayEnd } },
+      }),
+      prisma.order.findMany({
+        where: {
+          status: { in: ['PAID', 'SHIPPED'] },
+          paidAt: { gte: todayStart, lte: todayEnd },
+        },
+        include: { items: true },
+      }),
+    ]);
+
+    let todayIncome = 0;
+    let todayExpenses = 0;
+    todayTxs.forEach((t) => {
+      if (t.type === 'INCOME') todayIncome += t.amount;
+      else if (t.type === 'EXPENSE') todayExpenses += t.amount;
+    });
+
+    let todayCOGS = 0;
+    todayPaidOrders.forEach((o) => {
+      o.items.forEach((it) => {
+        const itemHpp = it.costPrice > 0 ? it.costPrice : 20000;
+        todayCOGS += itemHpp * it.quantity;
+      });
+    });
+
+    const todayGrossProfit = todayIncome - todayCOGS;
+    const todayNetProfit = todayGrossProfit - todayExpenses;
+
+    // 5. Fetch dynamic available years from database timestamp
     const [txDates, orderDates] = await Promise.all([
       prisma.financeTransaction.findMany({
         select: { transactionDate: true },
@@ -158,6 +204,11 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
       grossProfit,
       totalExpenses,
       netProfit,
+      todayIncome,
+      todayCOGS,
+      todayGrossProfit,
+      todayExpenses,
+      todayNetProfit,
       transactions,
       paidOrders: paidOrdersSummary,
       availableYears,

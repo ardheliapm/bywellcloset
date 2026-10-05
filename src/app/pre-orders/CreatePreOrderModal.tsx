@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   X,
   Plus,
@@ -16,17 +17,14 @@ import {
   AlertCircle,
   Clock,
   ClipboardPaste,
-  Search,
+  ChevronDown,
   Check,
 } from 'lucide-react';
 import { ProductItem } from '../products/actions';
-import { createPreOrder, CreatePreOrderItemInput } from './actions';
-import SearchableProductSelect from '@/components/SearchableProductSelect';
+import { createPreOrder } from './actions';
 import {
   getStoredProductTypes,
-  calculateProductPrice,
   findProductMasterType,
-  checkIsResellerEligible,
   ProductMasterType,
   DEFAULT_PRODUCT_TYPES,
 } from '@/lib/productTypes';
@@ -45,7 +43,6 @@ interface FormItem {
   productName: string;
   price: number;
   quantityOrdered: number;
-  isMatched?: boolean;
 }
 
 export default function CreatePreOrderModal({
@@ -54,26 +51,25 @@ export default function CreatePreOrderModal({
   products = [],
   onCreated,
 }: CreatePreOrderModalProps) {
-  const [activeTab, setActiveTab] = useState<'paste' | 'manual'>('paste');
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
 
-  // Paste Textarea State
-  const [rawText, setRawText] = useState(
-`KAK DELLA
-spark flower(4)
-blush sparky(3)
-BW83(3)`
-  );
+  // WhatsApp quick paste text state
+  const [rawText, setRawText] = useState('');
+  const [showPasteBox, setShowPasteBox] = useState(false);
 
-  // Common Form States
+  // Main Form States
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<FormItem[]>([]);
-  const [hasParsed, setHasParsed] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Open suggestion dropdown for a specific row index
+  const [activeDropdownIndex, setActiveDropdownIndex] = useState<number | null>(null);
 
   // Reset or initialize on open
   useEffect(() => {
@@ -85,13 +81,14 @@ BW83(3)`
             productId: null,
             productSku: '',
             productName: '',
-            price: 0,
+            price: 42000,
             quantityOrdered: 1,
           },
         ]);
       }
       setError(null);
       setSuccessMsg(null);
+      setShowPasteBox(false);
     }
   }, [isOpen]);
 
@@ -111,13 +108,13 @@ BW83(3)`
     0
   );
 
-  // Product Matching Helper (Accurate & avoids false positives on new products)
+  // Product Matching Helper
   const findBestProductMatch = (query: string): ProductItem | null => {
     const q = query.toLowerCase().trim();
     if (!q) return null;
     const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
-    // 1. Exact SKU match (e.g. "BW83", "bw-83", "BW 83")
+    // 1. Exact SKU match
     const exactSku = products.find(
       (p) =>
         p.sku.toLowerCase() === q ||
@@ -125,17 +122,17 @@ BW83(3)`
     );
     if (exactSku) return exactSku;
 
-    // 2. Exact Motif match (e.g. "spark flower", "blush peony")
+    // 2. Exact Motif match
     const exactMotif = products.find(
       (p) => p.motif && p.motif.toLowerCase().trim() === q
     );
     if (exactMotif) return exactMotif;
 
-    // 3. Exact Full Name match (e.g. "Midi Dress Spark Flower")
+    // 3. Exact Full Name match
     const exactName = products.find((p) => p.name.toLowerCase().trim() === q);
     if (exactName) return exactName;
 
-    // 4. Exact Combined Name & Motif (e.g. "Midi Dress - Spark Flower")
+    // 4. Exact Combined
     const exactCombined = products.find((p) => {
       const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
       const withColor = `${p.name} ${p.motif || ''} ${p.color || ''}`.toLowerCase().trim();
@@ -144,7 +141,7 @@ BW83(3)`
     });
     if (exactCombined) return exactCombined;
 
-    // 5. SKU prefix match (e.g. "BW83")
+    // 5. SKU prefix match
     if (cleanQ.length >= 3) {
       const prefixSku = products.find((p) => {
         const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -153,21 +150,20 @@ BW83(3)`
       if (prefixSku) return prefixSku;
     }
 
-    // 6. Database product name / motif contains entire query (e.g. query is "Spark Flower" and product name is "Gamis Rayon Spark Flower")
+    // 6. Name / Motif includes query
     if (q.length >= 4) {
-      const nameContainsQuery = products.find((p) => {
+      const nameContains = products.find((p) => {
         const pName = p.name.toLowerCase();
         const pMotif = p.motif ? p.motif.toLowerCase() : '';
         return pName.includes(q) || (pMotif && pMotif.includes(q));
       });
-      if (nameContainsQuery) return nameContainsQuery;
+      if (nameContains) return nameContains;
     }
 
-    // Not matched in Master Data -> Treat as New Product
     return null;
   };
 
-  // Calculate reseller tier price for total order pcs
+  // Reseller tier price calculation based on total PO qty
   const getResellerTierPriceForTotalQty = (
     totalQty: number,
     typesList: ProductMasterType[] = DEFAULT_PRODUCT_TYPES
@@ -187,11 +183,10 @@ BW83(3)`
     return 42000;
   };
 
-  // Recalculate tier prices based on total quantity of all PO items
+  // Recalculate tier prices
   const recalculateTierPrices = (currentItems: FormItem[]) => {
     const types = getStoredProductTypes();
     
-    // Calculate total quantity of all reseller pool items
     let totalResellerPoolQty = 0;
     currentItems.forEach((it) => {
       const nameToCheck = it.productName || it.productSku;
@@ -209,7 +204,6 @@ BW83(3)`
       if (!nameToCheck) return it;
       const master = findProductMasterType(nameToCheck, types);
 
-      // Explicit non-reseller types keep their own price
       if (master && !master.isResellerEligible) {
         const prod = products.find((p) => p.id === it.productId);
         const basePrice = prod?.sellingPrice || master.defaultPrice || 85000;
@@ -219,7 +213,6 @@ BW83(3)`
         };
       }
 
-      // All regular and new unregistered motifs get the total reseller tier unit price
       return {
         ...it,
         price: resellerUnitPrice,
@@ -303,7 +296,6 @@ BW83(3)`
       productName: r.productName,
       price: r.price,
       quantityOrdered: r.quantity,
-      isMatched: !!r.product,
     }));
 
     if (parsedList.length === 0) return null;
@@ -360,32 +352,21 @@ BW83(3)`
       setCustomerName(parsed.customer);
     }
     setItems(parsed.items);
-    setHasParsed(true);
-    setSuccessMsg(`Berhasil mem-parse ${parsed.items.length} produk untuk ${parsed.customer || 'Customer'}!`);
+    setShowPasteBox(false);
+    setSuccessMsg(`Berhasil mengisi ${parsed.items.length} produk untuk ${parsed.customer || 'Customer'}!`);
     setTimeout(() => setSuccessMsg(null), 3000);
   };
 
-  const handleProductSelect = (index: number, prodId: string, prod?: ProductItem) => {
+  const handleSelectProduct = (index: number, prod: ProductItem) => {
     const updated = [...items];
-    if (prod) {
-      updated[index] = {
-        ...updated[index],
-        productId: prod.id,
-        productSku: prod.sku,
-        productName: prod.name + (prod.motif ? ` - ${prod.motif}` : '') + (prod.color ? ` (${prod.color})` : ''),
-        price: prod.sellingPrice || prod.wholesalePrice || 42000,
-        isMatched: true,
-      };
-    } else {
-      updated[index] = {
-        ...updated[index],
-        productId: null,
-        productSku: '',
-        productName: '',
-        price: 0,
-        isMatched: false,
-      };
-    }
+    updated[index] = {
+      ...updated[index],
+      productId: prod.id,
+      productSku: prod.sku,
+      productName: prod.name + (prod.motif ? ` - ${prod.motif}` : '') + (prod.color ? ` (${prod.color})` : ''),
+      price: prod.sellingPrice || prod.wholesalePrice || 42000,
+    };
+    setActiveDropdownIndex(null);
     setItems(updated);
     recalculateTierPrices(updated);
   };
@@ -405,6 +386,8 @@ BW83(3)`
   };
 
   const handleAddItemRow = () => {
+    const types = getStoredProductTypes();
+    const defaultUnitPrice = getResellerTierPriceForTotalQty(totalQuantity + 1, types);
     setItems([
       ...items,
       {
@@ -412,9 +395,8 @@ BW83(3)`
         productId: null,
         productSku: '',
         productName: '',
-        price: 0,
+        price: defaultUnitPrice,
         quantityOrdered: 1,
-        isMatched: false,
       },
     ]);
   };
@@ -431,63 +413,55 @@ BW83(3)`
     setError(null);
     setSuccessMsg(null);
 
-    let activeCustomerName = customerName.trim();
-    let activeItems = [...items];
-
-    // If user is in paste tab and has rawText, auto-parse if needed
-    if (activeTab === 'paste' && rawText.trim()) {
-      const parsed = parseWhatsAppStringToItems(rawText);
-      if (parsed) {
-        if (!activeCustomerName && parsed.customer) {
-          activeCustomerName = parsed.customer;
-          setCustomerName(parsed.customer);
-        }
-        if (activeItems.length === 0 || !activeItems[0].productSku || !hasParsed) {
-          activeItems = parsed.items;
-          setItems(parsed.items);
-        }
-      }
-    }
+    const activeCustomerName = customerName.trim();
 
     if (!activeCustomerName) {
-      setError('Nama customer wajib diisi. Silakan isi Nama Customer di kolom atas atau di baris pertama teks WhatsApp.');
+      setError('Nama customer wajib diisi.');
       return;
     }
 
-    const validItems = activeItems.filter(
+    const validItems = items.filter(
       (it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0
     );
 
     if (validItems.length === 0) {
-      setError('Silakan tentukan minimal 1 produk/motif untuk dicatat PO.');
+      setError('Silakan tentukan minimal 1 nama produk/motif untuk dicatat PO.');
       return;
     }
 
     setLoading(true);
 
-    const res = await createPreOrder({
-      customerName: activeCustomerName,
-      customerPhone: customerPhone.trim() || null,
-      notes: notes.trim() || null,
-      items: validItems.map((it) => ({
-        productId: it.productId,
-        productSku: (it.productSku || it.productName || 'PO-ITEM').trim(),
-        productName: (it.productName || it.productSku || 'Produk PO').trim(),
-        price: it.price,
-        quantityOrdered: it.quantityOrdered,
-      })),
-    });
+    try {
+      const res = await createPreOrder({
+        customerName: activeCustomerName,
+        customerPhone: customerPhone.trim() || null,
+        notes: notes.trim() || null,
+        items: validItems.map((it) => ({
+          productId: it.productId,
+          productSku: (it.productSku || it.productName || 'PO-ITEM').trim(),
+          productName: (it.productName || it.productSku || 'Produk PO').trim(),
+          price: it.price,
+          quantityOrdered: it.quantityOrdered,
+        })),
+      });
 
-    setLoading(false);
-
-    if (res.success) {
-      setSuccessMsg(`Pre-Order #${res.poNumber} berhasil dicatat!`);
-      if (onCreated) onCreated();
-      setTimeout(() => {
-        onClose();
-      }, 1000);
-    } else {
-      setError(res.error || 'Gagal menyimpan Pre-Order.');
+      if (res.success) {
+        setSuccessMsg(`Pre-Order #${res.poNumber} berhasil dicatat!`);
+        startTransition(() => {
+          router.refresh();
+        });
+        if (onCreated) onCreated();
+        setTimeout(() => {
+          setLoading(false);
+          onClose();
+        }, 700);
+      } else {
+        setLoading(false);
+        setError(res.error || 'Gagal menyimpan Pre-Order.');
+      }
+    } catch (err: any) {
+      setLoading(false);
+      setError(err?.message || 'Terjadi kesalahan sistem saat menyimpan Pre-Order.');
     }
   };
 
@@ -503,47 +477,21 @@ BW83(3)`
             <div>
               <h2 className="text-base sm:text-lg font-bold">Catat Pre-Order (PO) Baru</h2>
               <p className="text-slate-400 text-xs">
-                Pencatatan antrean pesanan PO yang akan otomatis terpenuhi saat barang datang di Stok Masuk
+                Antrean pesanan PO yang akan otomatis terpenuhi saat barang datang di Stok Masuk
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
             type="button"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Tab Selection */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2">
-          <button
-            type="button"
-            onClick={() => setActiveTab('paste')}
-            className={`px-4 py-2 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'paste'
-                ? 'bg-white text-indigo-600 border-slate-200 shadow-2xs'
-                : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
-            }`}
-          >
-            <ClipboardPaste className="w-3.5 h-3.5" /> Paste Chat WhatsApp (Otomatis Parse)
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('manual')}
-            className={`px-4 py-2 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'manual'
-                ? 'bg-white text-indigo-600 border-slate-200 shadow-2xs'
-                : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
-            }`}
-          >
-            <Plus className="w-3.5 h-3.5" /> Pilih Manual (Satu Per Satu)
-          </button>
-        </div>
-
         {/* Body */}
-        <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
           {error && (
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -558,25 +506,27 @@ BW83(3)`
             </div>
           )}
 
-          {/* Locked Reseller Tier Banner */}
-          <div className="p-3 rounded-xl bg-indigo-50/70 border border-indigo-200 text-xs text-indigo-950 flex items-start gap-2.5">
-            <Sparkles className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-bold">Ketentuan Harga Reseller Terkunci (Locked Tier):</p>
-              <p className="text-indigo-800 text-[11px] mt-0.5">
-                Harga satuan dihitung otomatis berdasarkan <strong>TOTAL kuantiti seluruh item PO</strong>. Ketika barang dicicil kirim sebagian, harga per pcs tetap memakai harga reseller total ini.
-              </p>
-            </div>
+          {/* Quick Paste Toggle Button */}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowPasteBox(!showPasteBox)}
+              className="px-3.5 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-100/80 text-indigo-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5" />
+              {showPasteBox ? 'Tutup Kotak Paste Chat WhatsApp' : '📋 Paste Chat WhatsApp (Otomatis Isi Form)'}
+            </button>
+            <span className="text-[11px] text-slate-400">Total {items.length} Baris • {totalQuantity} Pcs</span>
           </div>
 
-          {/* PASTE WHATSAPP SECTION */}
-          {activeTab === 'paste' && (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+          {/* PASTE WHATSAPP SECTION (COLLAPSIBLE) */}
+          {showPasteBox && (
+            <div className="p-4 bg-slate-50 border border-indigo-100 rounded-xl space-y-3 animate-in fade-in">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Chat WhatsApp Customer:
                 </label>
-                <span className="text-[11px] text-slate-400">Baris 1 = Nama Customer, Baris berikutnya = Produk & Qty</span>
+                <span className="text-[11px] text-slate-400">Baris 1 = Nama Customer, Baris berikutnya = Motif/SKU & Qty</span>
               </div>
 
               <textarea
@@ -587,13 +537,20 @@ BW83(3)`
                 className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
               />
 
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasteBox(false)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 text-xs font-semibold"
+                >
+                  Batal
+                </button>
                 <button
                   type="button"
                   onClick={handleParseWhatsAppText}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                 >
-                  <Sparkles className="w-3.5 h-3.5" /> Proses & Parse Teks WhatsApp
+                  <Sparkles className="w-3.5 h-3.5" /> Proses & Masukkan ke Form
                 </button>
               </div>
             </div>
@@ -611,6 +568,7 @@ BW83(3)`
                   placeholder="Contoh: KAK DELLA"
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
+                  required
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 />
               </div>
@@ -658,179 +616,149 @@ BW83(3)`
                 </button>
               </div>
 
-                      <div className="space-y-2.5">
-                {items.map((row, idx) => (
-                  <div
-                    key={row.id || idx}
-                    className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex flex-col gap-2.5"
-                  >
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                      {/* Searchable Select or Manual Input */}
-                      <div className="flex-1 w-full">
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="block text-[11px] font-semibold text-slate-600">
-                            Produk PO #{idx + 1}
+              <div className="space-y-2.5">
+                {items.map((row, idx) => {
+                  const filteredMaster = row.productName?.trim()
+                    ? products.filter((p) => {
+                        const q = row.productName.toLowerCase();
+                        return (
+                          p.sku.toLowerCase().includes(q) ||
+                          p.name.toLowerCase().includes(q) ||
+                          (p.motif && p.motif.toLowerCase().includes(q))
+                        );
+                      })
+                    : products.slice(0, 8);
+
+                  return (
+                    <div
+                      key={row.id || idx}
+                      className="p-3 bg-slate-50/90 rounded-xl border border-slate-200 flex flex-col gap-2 relative"
+                    >
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                        {/* Unified Product / Motif Input with Suggestions */}
+                        <div className="flex-1 w-full relative">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Nama Produk / Motif PO #{idx + 1}
                           </label>
-                          {row.productId ? (
-                            <button
-                              type="button"
-                              onClick={() => {
+                          <div className="relative">
+                            <input
+                              type="text"
+                              placeholder="Ketik nama motif / produk (cth: Monogram Navy / BW83)..."
+                              value={row.productName}
+                              onFocus={() => setActiveDropdownIndex(idx)}
+                              onChange={(e) => {
+                                const val = e.target.value;
                                 const updated = [...items];
                                 updated[idx] = {
                                   ...updated[idx],
-                                  productId: null,
-                                  isMatched: false,
-                                };
-                                setItems(updated);
-                              }}
-                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-medium underline cursor-pointer"
-                            >
-                              ✍️ Ubah ke Input Produk Baru (Manual)
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const updated = [...items];
-                                updated[idx] = {
-                                  ...updated[idx],
-                                  productId: products[0]?.id || null,
-                                  productSku: products[0]?.sku || '',
-                                  productName: products[0]?.name || '',
-                                  price: products[0]?.sellingPrice || 42000,
-                                  isMatched: true,
+                                  productName: val,
+                                  productSku: updated[idx].productSku || val.toUpperCase().replace(/\s+/g, '-'),
                                 };
                                 setItems(updated);
                                 recalculateTierPrices(updated);
+                                setActiveDropdownIndex(idx);
                               }}
-                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-medium underline cursor-pointer"
-                            >
-                              🔍 Cari dari Master Data
-                            </button>
-                          )}
+                              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
+                            />
+
+                            {/* Dropdown Suggestions */}
+                            {activeDropdownIndex === idx && filteredMaster.length > 0 && (
+                              <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-50">
+                                <div className="p-1.5 bg-slate-50 text-[10px] font-semibold text-slate-400 uppercase flex items-center justify-between">
+                                  <span>Pilih dari Master Data</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveDropdownIndex(null)}
+                                    className="text-slate-400 hover:text-slate-700"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                                {filteredMaster.map((prod) => (
+                                  <div
+                                    key={prod.id}
+                                    onClick={() => handleSelectProduct(idx, prod)}
+                                    className="p-2 hover:bg-indigo-50 cursor-pointer text-xs flex items-center justify-between"
+                                  >
+                                    <div className="truncate">
+                                      <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1 py-0.5 rounded text-[10px] mr-1.5">
+                                        {prod.sku}
+                                      </span>
+                                      <span className="font-medium text-slate-800">
+                                        {prod.name} {prod.motif ? `- ${prod.motif}` : ''}
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] text-slate-400 shrink-0">
+                                      Stok: {prod.physicalStock}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
-                        {row.productId ? (
-                          <SearchableProductSelect
-                            products={products}
-                            value={row.productId}
-                            onChange={(val, prod) => handleProductSelect(idx, val, prod)}
-                            placeholder="Ketik SKU atau nama motif..."
-                            stockType="AVAILABLE"
-                            allowManual={true}
-                            onManualSelect={() => {
-                              const updated = [...items];
-                              updated[idx] = {
-                                ...updated[idx],
-                                productId: null,
-                                isMatched: false,
-                              };
-                              setItems(updated);
-                            }}
-                          />
-                        ) : (
-                          <div className="space-y-1.5">
-                            <div className="flex gap-2">
-                              <input
-                                type="text"
-                                placeholder="Nama motif / produk baru (cth: Gamis Rayon Spark Flower)..."
-                                value={row.productName}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  const updated = [...items];
-                                  updated[idx] = {
-                                    ...updated[idx],
-                                    productName: val,
-                                    productSku: updated[idx].productSku || val.toUpperCase().replace(/\s+/g, '-'),
-                                  };
-                                  setItems(updated);
-                                  recalculateTierPrices(updated);
-                                }}
-                                className="flex-1 px-3 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-semibold text-slate-900 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
-                              />
-                              <input
-                                type="text"
-                                placeholder="SKU (cth: BW83 / SPARK)"
-                                value={row.productSku}
-                                onChange={(e) => {
-                                  const updated = [...items];
-                                  updated[idx] = {
-                                    ...updated[idx],
-                                    productSku: e.target.value.toUpperCase(),
-                                  };
-                                  setItems(updated);
-                                }}
-                                className="w-28 px-2.5 py-1.5 bg-white border border-indigo-200 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400 placeholder:font-normal"
-                              />
-                            </div>
-                            <div className="flex items-center gap-1.5 text-[10px] text-amber-700 font-medium bg-amber-50/80 px-2 py-0.5 rounded-md border border-amber-200/60">
-                              <Sparkles className="w-3 h-3 text-amber-600 shrink-0" />
-                              <span>✨ Produk Baru (Belum ada di Master Data - otomatis dicocokkan saat Stok Masuk)</span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Quantity */}
-                      <div className="w-full sm:w-24">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Qty (Pcs)
-                        </label>
-                        <input
-                          type="number"
-                          min="1"
-                          value={row.quantityOrdered}
-                          onChange={(e) =>
-                            handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
-                          }
-                          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
-                        />
-                      </div>
-
-                      {/* Price */}
-                      <div className="w-full sm:w-28">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
-                          Harga Satuan (Rp)
-                        </label>
-                        <div className="relative">
-                          <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                        {/* Quantity */}
+                        <div className="w-full sm:w-24">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Qty (Pcs)
+                          </label>
                           <input
                             type="number"
-                            min="0"
-                            value={row.price}
+                            min="1"
+                            value={row.quantityOrdered}
                             onChange={(e) =>
-                              handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                              handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)
                             }
-                            className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-center focus:ring-1 focus:ring-indigo-500"
                           />
                         </div>
-                      </div>
 
-                      {/* Subtotal */}
-                      <div className="w-full sm:w-28 text-right hidden sm:block">
-                        <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                          Subtotal
-                        </label>
-                        <span className="text-xs font-bold text-slate-900">
-                          {formatRupiah(row.price * row.quantityOrdered)}
-                        </span>
-                      </div>
+                        {/* Price */}
+                        <div className="w-full sm:w-28">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1 text-right">
+                            Harga Satuan (Rp)
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-2 top-1.5 text-slate-400 text-[10px] font-semibold">Rp</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={row.price}
+                              onChange={(e) =>
+                                handlePriceChange(idx, parseInt(e.target.value, 10) || 0)
+                              }
+                              className="w-full pl-6 pr-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                        </div>
 
-                      {/* Remove */}
-                      <div className="sm:pt-5 shrink-0 self-end sm:self-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItemRow(idx)}
-                          disabled={items.length <= 1}
-                          className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
-                          title="Hapus baris"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {/* Subtotal */}
+                        <div className="w-full sm:w-28 text-right hidden sm:block">
+                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                            Subtotal
+                          </label>
+                          <span className="text-xs font-bold text-slate-900">
+                            {formatRupiah(row.price * row.quantityOrdered)}
+                          </span>
+                        </div>
+
+                        {/* Remove */}
+                        <div className="sm:pt-5 shrink-0 self-end sm:self-center">
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItemRow(idx)}
+                            disabled={items.length <= 1}
+                            className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-20 cursor-pointer"
+                            title="Hapus baris"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </form>
@@ -840,12 +768,12 @@ BW83(3)`
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-4 text-xs">
             <div>
-              <span className="text-slate-500">Total Kuantitas PO: </span>
+              <span className="text-slate-500">Total PO: </span>
               <strong className="text-slate-900 font-mono text-sm">{totalQuantity} pcs</strong>
             </div>
             <div className="h-4 w-px bg-slate-200" />
             <div>
-              <span className="text-slate-500">Total Nilai PO: </span>
+              <span className="text-slate-500">Total Nilai: </span>
               <strong className="text-indigo-600 font-mono text-sm sm:text-base font-black">
                 {formatRupiah(totalAmount)}
               </strong>
@@ -864,10 +792,10 @@ BW83(3)`
             <button
               type="button"
               onClick={() => handleSubmit()}
-              disabled={loading}
+              disabled={loading || isPending}
               className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
             >
-              {loading ? (
+              {loading || isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" /> Menyimpan...
                 </>
