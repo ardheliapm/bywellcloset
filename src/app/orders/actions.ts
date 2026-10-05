@@ -50,7 +50,15 @@ export async function markOrderAsPaid(orderId: string) {
   try {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { items: true },
+      include: {
+        items: {
+          include: {
+            product: {
+              select: { id: true, costPrice: true },
+            },
+          },
+        },
+      },
     });
 
     if (!order) {
@@ -61,7 +69,7 @@ export async function markOrderAsPaid(orderId: string) {
       return { success: false, error: `Order tidak dalam status HOLD (status saat ini: ${order.status})` };
     }
 
-    // Run transaction
+    // Run transaction with explicit timeout configuration for Supabase pooler
     await prisma.$transaction(async (tx) => {
       // 1. Update Order status to PAID
       await tx.order.update({
@@ -72,22 +80,14 @@ export async function markOrderAsPaid(orderId: string) {
         },
       });
 
-      let totalHijabQty = 0;
-
       // 2. Reduce physicalStock and release reservedStock
       for (const item of order.items) {
-        totalHijabQty += item.quantity;
         if (item.productId) {
-          const prod = await tx.product.findUnique({
-            where: { id: item.productId },
-            select: { costPrice: true },
-          });
-
-          if (prod) {
-            // Snapshot costPrice
+          const cost = item.product?.costPrice || item.costPrice || 0;
+          if (cost > 0 && item.costPrice === 0) {
             await tx.orderItem.update({
               where: { id: item.id },
-              data: { costPrice: prod.costPrice || 0 },
+              data: { costPrice: cost },
             });
           }
 
@@ -116,11 +116,14 @@ export async function markOrderAsPaid(orderId: string) {
         data: {
           type: 'INCOME',
           category: 'SALES',
-          amount: order.totalAmount,
+          amount: Math.max(0, Math.floor(order.totalAmount)),
           description: `Penjualan Lunas Order #${order.orderNumber} (${order.customerName})`,
           referenceId: order.orderNumber,
         },
       });
+    }, {
+      maxWait: 15000,
+      timeout: 30000,
     });
 
     revalidatePath('/orders');
@@ -212,6 +215,9 @@ export async function cancelOrder(orderId: string) {
           status: 'CANCELLED',
         },
       });
+    }, {
+      maxWait: 15000,
+      timeout: 30000,
     });
 
     revalidatePath('/orders');
@@ -410,6 +416,9 @@ export async function addItemsToOrder(
           totalAmount: updatedTotalAmount,
         },
       });
+    }, {
+      maxWait: 15000,
+      timeout: 30000,
     });
 
     revalidatePath('/orders');
@@ -632,6 +641,9 @@ export async function updateOrderDetails(payload: UpdateOrderPayload) {
           });
         }
       }
+    }, {
+      maxWait: 15000,
+      timeout: 30000,
     });
 
     revalidatePath('/orders');

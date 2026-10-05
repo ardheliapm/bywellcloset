@@ -167,18 +167,23 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
 
     setActionLoading(true);
     try {
+      let res: { success: boolean; error?: string } = { success: true };
+
       if (confirmDialog.type === 'PAY') {
-        await markOrderAsPaid(orderId);
+        res = await markOrderAsPaid(orderId);
       } else if (confirmDialog.type === 'SHIP') {
-        await markOrderAsShipped(orderId);
+        res = await markOrderAsShipped(orderId);
       } else if (confirmDialog.type === 'CANCEL') {
-        await cancelOrder(orderId);
+        res = await cancelOrder(orderId);
       } else if (confirmDialog.type === 'DELETE') {
-        const res = await deleteOrder(orderId);
-        if (!res.success) {
-          alert(res.error || 'Gagal menghapus pesanan');
-        }
+        res = await deleteOrder(orderId);
       }
+
+      if (!res.success) {
+        alert(res.error || 'Gagal memproses pesanan.');
+      }
+    } catch (e: any) {
+      alert(e?.message || 'Terjadi kesalahan sistem saat memproses pesanan.');
     } finally {
       setActionLoading(false);
       closeConfirmModal();
