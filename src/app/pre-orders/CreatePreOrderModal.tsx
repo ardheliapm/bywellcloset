@@ -26,6 +26,7 @@ import { createPreOrder } from './actions';
 import {
   getStoredProductTypes,
   findProductMasterType,
+  checkIsResellerEligible,
   ProductMasterType,
   DEFAULT_PRODUCT_TYPES,
 } from '@/lib/productTypes';
@@ -222,40 +223,70 @@ SPARK FLOWER(1)`
     return 42000;
   };
 
+  // Calculate unit price for an item based on its category and overall list
+  const calculateItemUnitPrice = (
+    item: { categoryName?: string; productName?: string; productSku?: string; productId?: string | null; quantityOrdered: number },
+    allItems: { categoryName?: string; productName?: string; productSku?: string; quantityOrdered: number }[],
+    typesList: ProductMasterType[]
+  ): number => {
+    const nameToCheck = item.categoryName || item.productName || item.productSku || '';
+    const isReseller = checkIsResellerEligible(nameToCheck, typesList);
+
+    if (isReseller) {
+      // Calculate total quantity of items in the Baby Tryspan reseller pool
+      const totalResellerPoolQty = allItems.reduce((sum, it) => {
+        const check = it.categoryName || it.productName || it.productSku || '';
+        return checkIsResellerEligible(check, typesList) ? sum + (Number(it.quantityOrdered) || 0) : sum;
+      }, 0);
+      return getResellerTierPriceForTotalQty(totalResellerPoolQty, typesList);
+    }
+
+    // Non-reseller (e.g. PARIS JAPAN, BELLA SQUARE)
+    const prod = products.find(
+      (p) => p.id === item.productId || (item.productSku && p.sku.toLowerCase() === item.productSku.toLowerCase())
+    );
+    const master = findProductMasterType(nameToCheck, typesList);
+
+    let basePrice = 85000;
+    if (prod?.sellingPrice) {
+      basePrice = prod.sellingPrice;
+    } else if (master?.defaultPrice) {
+      basePrice = master.defaultPrice;
+    } else if (nameToCheck.toUpperCase().includes('BELLA')) {
+      basePrice = 35000;
+    } else if (nameToCheck.toUpperCase().includes('PARIS') || nameToCheck.toUpperCase().includes('JEPANG') || nameToCheck.toUpperCase().includes('JAPAN')) {
+      basePrice = 85000;
+    }
+
+    // Check if category has specific volume tiers (e.g. Paris Japan >= 50 pcs -> 24.000)
+    if (master?.tiers && master.tiers.length > 0) {
+      const categoryPrefix = master.name.toUpperCase();
+      const totalCategoryQty = allItems.reduce((sum, it) => {
+        const cat = (it.categoryName || it.productName || '').toUpperCase();
+        return cat.includes(categoryPrefix) || (categoryPrefix.includes('PARIS') && (cat.includes('PARIS') || cat.includes('JEPANG') || cat.includes('PJ')))
+          ? sum + (Number(it.quantityOrdered) || 0)
+          : sum;
+      }, 0);
+
+      const sortedTiers = [...master.tiers].sort((a, b) => b.minQty - a.minQty);
+      for (const tier of sortedTiers) {
+        if (totalCategoryQty >= tier.minQty && (tier.maxQty === null || tier.maxQty === undefined || totalCategoryQty <= tier.maxQty)) {
+          return tier.price;
+        }
+      }
+    }
+
+    return basePrice;
+  };
+
   // Recalculate tier prices preserving custom prices
   const recalculateTierPrices = (currentItems: FormItem[]) => {
     const types = getStoredProductTypes();
-    
-    let totalResellerPoolQty = 0;
-    currentItems.forEach((it) => {
-      const nameToCheck = it.categoryName || it.productName || it.productSku;
-      if (!nameToCheck) return;
-      const master = findProductMasterType(nameToCheck, types);
-      if (!master || master.isResellerEligible) {
-        totalResellerPoolQty += Number(it.quantityOrdered) || 0;
-      }
-    });
-
-    const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
-
     const refreshed = currentItems.map((it) => {
       if (it.isCustomPrice) return it;
-
-      const nameToCheck = it.categoryName || it.productName || it.productSku;
-      const master = findProductMasterType(nameToCheck, types);
-
-      if (master && !master.isResellerEligible) {
-        const prod = products.find((p) => p.id === it.productId);
-        const basePrice = prod?.sellingPrice || master.defaultPrice || 85000;
-        return {
-          ...it,
-          price: basePrice,
-        };
-      }
-
       return {
         ...it,
-        price: resellerUnitPrice,
+        price: calculateItemUnitPrice(it, currentItems, types),
       };
     });
 
@@ -331,16 +362,22 @@ SPARK FLOWER(1)`
       const categoryName = lineCategory?.name || 'BABY TRYSPAN';
       const matchedProduct = findBestProductMatch(itemName, categoryName);
 
-      const sku = matchedProduct ? matchedProduct.sku : itemName.toUpperCase();
-      const displayName = matchedProduct
-        ? matchedProduct.name + (matchedProduct.motif ? ` - ${matchedProduct.motif}` : '') + (matchedProduct.color ? ` (${matchedProduct.color})` : '')
-        : `${categoryName} - ${itemName}`;
+      const isParis = categoryName.toUpperCase().includes('PARIS') || categoryName.toUpperCase().includes('JEPANG');
+      const sku = matchedProduct 
+        ? matchedProduct.sku 
+        : (isParis ? `PJ-${itemName.toUpperCase()}` : itemName.toUpperCase());
 
-      let initialPrice = 42000;
-      if (matchedProduct?.sellingPrice) {
-        initialPrice = matchedProduct.sellingPrice;
-      } else if (lineCategory && !lineCategory.isResellerEligible) {
-        initialPrice = lineCategory.defaultPrice || 85000;
+      // Format display name while strictly preserving motif/number (e.g. 163, 2, 101W)
+      let displayName = '';
+      if (matchedProduct) {
+        const hasMotifInName = matchedProduct.motif && matchedProduct.name.toLowerCase().includes(matchedProduct.motif.toLowerCase());
+        const motifPart = matchedProduct.motif 
+          ? (hasMotifInName ? '' : ` - ${matchedProduct.motif}`) 
+          : (itemName && !matchedProduct.name.toLowerCase().includes(itemName.toLowerCase()) ? ` - ${itemName}` : '');
+        const colorPart = matchedProduct.color ? ` (${matchedProduct.color})` : '';
+        displayName = `${matchedProduct.name}${motifPart}${colorPart}`;
+      } else {
+        displayName = `${categoryName} - ${itemName}`;
       }
 
       parsedList.push({
@@ -349,7 +386,7 @@ SPARK FLOWER(1)`
         productSku: sku,
         productName: displayName,
         categoryName,
-        price: initialPrice,
+        price: 85000, // will be recalculated right below
         quantityOrdered: qty,
         isCustomPrice: false,
       });
@@ -357,36 +394,11 @@ SPARK FLOWER(1)`
 
     if (parsedList.length === 0) return null;
 
-    // Calculate reseller pool
-    let totalResellerPoolQty = 0;
-    parsedList.forEach((it) => {
-      const nameToCheck = it.categoryName || it.productName || it.productSku;
-      const master = findProductMasterType(nameToCheck, types);
-      if (!master || master.isResellerEligible) {
-        totalResellerPoolQty += Number(it.quantityOrdered) || 0;
-      }
-    });
-
-    const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
-
-    const refreshed = parsedList.map((it) => {
-      const nameToCheck = it.categoryName || it.productName || it.productSku;
-      const master = findProductMasterType(nameToCheck, types);
-
-      if (master && !master.isResellerEligible) {
-        const prod = products.find((p) => p.id === it.productId);
-        const basePrice = prod?.sellingPrice || master.defaultPrice || 85000;
-        return {
-          ...it,
-          price: basePrice,
-        };
-      }
-
-      return {
-        ...it,
-        price: resellerUnitPrice,
-      };
-    });
+    // Recalculate prices for all parsed items with strict category separation
+    const refreshed = parsedList.map((it) => ({
+      ...it,
+      price: calculateItemUnitPrice(it, parsedList, types),
+    }));
 
     return {
       customer: rawCustomer,

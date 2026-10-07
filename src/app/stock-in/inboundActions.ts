@@ -216,59 +216,127 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
             },
           });
 
-          // 2. If receivedQty > 0, find or update product physicalStock
+          // 2. If receivedQty > 0, find or update product physicalStock in Master Data
           if (receivedQty > 0) {
+            const rawSku = (itemRecord.productSku || '').trim();
+            const rawName = (itemRecord.productName || '').trim();
+            const cleanSku = rawSku.toLowerCase().replace(/[^a-z0-9]/g, '');
+
             let matchedProd = itemRecord.productId
               ? allProducts.find((p) => p.id === itemRecord.productId)
-              : allProducts.find(
-                  (p) =>
-                    p.sku.toLowerCase() === itemRecord.productSku.toLowerCase() ||
-                    (p.motif && p.motif.toLowerCase() === itemRecord.productSku.toLowerCase())
-                );
+              : allProducts.find((p) => {
+                  const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
+                  const pCleanMotif = (p.motif || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+                  const pNameClean = p.name.toLowerCase();
 
-            if (matchedProd) {
-              const updatedProd = await tx.product.update({
-                where: { id: matchedProd.id },
+                  // 1. Exact ID or SKU match
+                  if (p.sku.toLowerCase() === rawSku.toLowerCase()) return true;
+                  if (cleanSku && pCleanSku === cleanSku) return true;
+
+                  // 2. Motif match
+                  if (p.motif && (p.motif.toLowerCase() === rawSku.toLowerCase() || p.motif.toLowerCase() === rawName.toLowerCase())) return true;
+                  if (pCleanMotif && (pCleanMotif === cleanSku || rawName.toLowerCase().includes(p.motif!.toLowerCase()))) return true;
+
+                  // 3. Name match
+                  if (pNameClean === rawName.toLowerCase()) return true;
+                  if (`${pNameClean} - ${p.motif || ''}`.trim() === rawName.toLowerCase()) return true;
+
+                  return false;
+                });
+
+            // If product does not exist in Master Data yet, auto-create it so stock is NEVER lost!
+            if (!matchedProd) {
+              const isParis = rawName.toUpperCase().includes('PARIS') || rawName.toUpperCase().includes('JEPANG') || rawSku.toUpperCase().includes('PJ');
+              const isBella = rawName.toUpperCase().includes('BELLA') || rawSku.toUpperCase().includes('BS');
+
+              const mainCategory = isParis ? 'PARIS JAPAN' : (isBella ? 'BELLA SQUARE' : 'BABY TRYSPAN');
+              const sellingPrice = isParis ? 85000 : (isBella ? 35000 : 42000);
+              const wholesalePrice = isParis ? 24000 : (isBella ? 35000 : 39000);
+
+              let extractedMotif = '';
+              if (rawName.includes('-')) {
+                extractedMotif = rawName.split('-').slice(1).join('-').trim();
+              } else if (rawSku && !['SKU-IN', 'BARANG', 'PRODUK'].includes(rawSku.toUpperCase())) {
+                extractedMotif = rawSku.replace(/^(PJ|BT|BS)[-_ ]*/i, '').trim();
+              }
+
+              let generatedSku = rawSku && !['SKU-IN', 'BARANG', 'PRODUK'].includes(rawSku.toUpperCase())
+                ? rawSku.toUpperCase()
+                : (isParis ? `PJ-${extractedMotif || Math.floor(100 + Math.random() * 900)}` : `BW-${extractedMotif || Math.floor(100 + Math.random() * 900)}`);
+
+              // Ensure SKU uniqueness
+              const skuExists = allProducts.some((p) => p.sku.toUpperCase() === generatedSku.toUpperCase());
+              if (skuExists) {
+                generatedSku = `${generatedSku}-${Math.floor(10 + Math.random() * 90)}`;
+              }
+
+              matchedProd = await tx.product.create({
                 data: {
-                  physicalStock: { increment: receivedQty },
+                  sku: generatedSku,
+                  name: mainCategory,
+                  motif: extractedMotif || null,
+                  color: null,
+                  costPrice: 0,
+                  sellingPrice,
+                  wholesalePrice,
+                  physicalStock: 0, // will be incremented right below
+                  reservedStock: 0,
+                  isActive: true,
                 },
               });
 
-              // 3. Auto Allocate to Waiting Pre-Orders (FIFO)
-              const allocResult = await allocateStockToWaitingPreOrders(
-                tx,
-                updatedProd,
-                receivedQty
-              );
-
-              if (allocResult.allocatedCount > 0) {
-                poFulfillmentNotes.push(
-                  `+${allocResult.allocatedCount} pcs untuk PO #${allocResult.poNumbers.join(', #')}`
-                );
-              }
-
-              // 4. Log Stock Transaction
-              const selisih = receivedQty - itemRecord.expectedQty;
-              const diffText =
-                selisih > 0
-                  ? ` (Lebihan +${selisih} pcs)`
-                  : selisih < 0
-                  ? ` (Kurang ${selisih} pcs)`
-                  : ' (Sesuai Invoice)';
-
-              await tx.stockTransaction.create({
+              // Also link itemRecord to this newly created product
+              await tx.inboundShipmentItem.update({
+                where: { id: itemRecord.id },
                 data: {
                   productId: matchedProd.id,
-                  type: 'STOCK_IN',
-                  quantity: receivedQty,
-                  notes: `Kedatangan SJ #${shipment.invoiceNumber} (${itemRecord.productSku})${diffText}${
-                    allocResult.allocatedCount > 0
-                      ? ` [Alokasi PO: +${allocResult.allocatedCount} pcs]`
-                      : ''
-                  }`,
+                  productSku: matchedProd.sku,
                 },
               });
             }
+
+            // Increment physical stock
+            const updatedProd = await tx.product.update({
+              where: { id: matchedProd.id },
+              data: {
+                physicalStock: { increment: receivedQty },
+              },
+            });
+
+            // 3. Auto Allocate to Waiting Pre-Orders (FIFO)
+            const allocResult = await allocateStockToWaitingPreOrders(
+              tx,
+              updatedProd,
+              receivedQty
+            );
+
+            if (allocResult.allocatedCount > 0) {
+              poFulfillmentNotes.push(
+                `+${allocResult.allocatedCount} pcs untuk PO #${allocResult.poNumbers.join(', #')}`
+              );
+            }
+
+            // 4. Log Stock Transaction
+            const selisih = receivedQty - itemRecord.expectedQty;
+            const diffText =
+              selisih > 0
+                ? ` (Lebihan +${selisih} pcs)`
+                : selisih < 0
+                ? ` (Kurang ${selisih} pcs)`
+                : ' (Sesuai Surat Jalan)';
+
+            await tx.stockTransaction.create({
+              data: {
+                productId: matchedProd.id,
+                type: 'STOCK_IN',
+                quantity: receivedQty,
+                notes: `Kedatangan SJ #${shipment.invoiceNumber} (${matchedProd.sku})${diffText}${
+                  allocResult.allocatedCount > 0
+                    ? ` [Alokasi PO: +${allocResult.allocatedCount} pcs]`
+                    : ''
+                }`,
+              },
+            });
           }
         }
 
