@@ -98,25 +98,60 @@ export function saveStoredProductTypes(types: ProductMasterType[]): void {
   }
 }
 
+export const PRODUCT_TYPE_ALIASES: Record<string, string[]> = {
+  'type-baby-tryspan': ['BABY TRYSPAN', 'TRYSPAN', 'BABYTRYSPAN', 'BT', 'TRY SPAN'],
+  'type-paris-japan': ['PARIS JAPAN', 'PARIS JEPANG', 'PARIS JPN', 'PARIS', 'PJ'],
+  'type-bella-square': ['BELLA SQUARE', 'BELLA', 'BELLASQUARE', 'BS'],
+};
+
 /**
- * Find master product type definition
+ * Find master product type definition with aliases and smart keyword matching
  */
 export function findProductMasterType(
   productName: string | undefined | null,
   typesList: ProductMasterType[] = DEFAULT_PRODUCT_TYPES
 ): ProductMasterType | null {
   if (!productName) return null;
-  const clean = productName.trim().toUpperCase();
+  const clean = productName.trim().toUpperCase().replace(/[\*\[\]\(\)\:\-]/g, ' ').trim();
+  const tokens = clean.split(/\s+/).filter(Boolean);
 
-  // 1. Exact match
-  const exact = typesList.find((t) => t.name.toUpperCase() === clean);
-  if (exact) return exact;
+  // 1. Exact or alias match
+  for (const t of typesList) {
+    if (t.name.toUpperCase() === clean) return t;
 
-  // 2. Partial match
-  const partial = typesList.find(
-    (t) => clean.includes(t.name.toUpperCase()) || t.name.toUpperCase().includes(clean)
-  );
-  if (partial) return partial;
+    const aliases = PRODUCT_TYPE_ALIASES[t.id] || [];
+    if (aliases.some((al) => al === clean)) return t;
+  }
+
+  // 2. Token / prefix / partial matches
+  for (const t of typesList) {
+    const aliases = [t.name.toUpperCase(), ...(PRODUCT_TYPE_ALIASES[t.id] || [])];
+    for (const al of aliases) {
+      if (clean === al || clean.startsWith(`${al} `) || clean.endsWith(` ${al}`) || clean.includes(` ${al} `)) {
+        return t;
+      }
+      // Single token match if specific enough (e.g. "PJ", "JEPANG", "JAPAN", "TRYSPAN")
+      if (tokens.includes(al)) {
+        return t;
+      }
+    }
+  }
+
+  // 3. Fallback contains check
+  if (clean.includes('PARIS') || clean.includes('JEPANG') || clean.includes('JAPAN')) {
+    const pj = typesList.find((t) => t.id === 'type-paris-japan' || t.name.toUpperCase().includes('PARIS'));
+    if (pj) return pj;
+  }
+
+  if (clean.includes('TRYSPAN') || clean.includes('BABY')) {
+    const bt = typesList.find((t) => t.id === 'type-baby-tryspan' || t.name.toUpperCase().includes('TRYSPAN'));
+    if (bt) return bt;
+  }
+
+  if (clean.includes('BELLA')) {
+    const bs = typesList.find((t) => t.id === 'type-bella-square' || t.name.toUpperCase().includes('BELLA'));
+    if (bs) return bs;
+  }
 
   return null;
 }
@@ -134,6 +169,9 @@ export function checkIsResellerEligible(
   if (!productName) return false;
   const clean = productName.trim().toUpperCase();
   if (clean.includes('BABY TRYSPAN') || clean.includes('TRYSPAN')) return true;
+
+  // Paris / Bella are NOT eligible for baby tryspan reseller pool by default
+  if (clean.includes('PARIS') || clean.includes('BELLA')) return false;
 
   return false;
 }

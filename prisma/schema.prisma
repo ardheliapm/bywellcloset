@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Product {
@@ -24,6 +25,7 @@ model Product {
   stockTransactions StockTransaction[]
   orderItems        OrderItem[]
   preOrderItems     PreOrderItem[]
+  inboundShipmentItems InboundShipmentItem[]
 
   @@map("products")
 }
@@ -160,5 +162,43 @@ model User {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("users")
+}
+
+model InboundShipment {
+  id               String                @id @default(uuid())
+  invoiceNumber    String                @unique @map("invoice_number")
+  supplierName     String?               @default("Konveksi / Gudang") @map("supplier_name")
+  status           String                @default("ON_DELIVERY") // ON_DELIVERY, RECEIVED, CANCELLED
+  totalExpectedPcs Int                   @default(0) @map("total_expected_pcs")
+  totalReceivedPcs Int                   @default(0) @map("total_received_pcs")
+  freightCost      Int                   @default(0) @map("freight_cost")
+  expectedDate     DateTime?             @map("expected_date")
+  receivedDate     DateTime?             @map("received_date")
+  notes            String?
+  auditNotes       String?               @map("audit_notes")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  items            InboundShipmentItem[]
+
+  @@map("inbound_shipments")
+}
+
+model InboundShipmentItem {
+  id          String          @id @default(uuid())
+  shipmentId  String          @map("shipment_id")
+  productId   String?         @map("product_id")
+  productSku  String          @map("product_sku")
+  productName String          @map("product_name")
+  expectedQty Int             @default(0) @map("expected_qty")
+  receivedQty Int             @default(0) @map("received_qty")
+  notes       String?
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+
+  shipment    InboundShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  product     Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@map("inbound_shipment_items")
 }
 

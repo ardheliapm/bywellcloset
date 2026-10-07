@@ -42,6 +42,8 @@ interface FormItem {
   productId: string | null;
   productSku: string;
   productName: string;
+  categoryName?: string;
+  isCustomPrice?: boolean;
   price: number;
   quantityOrdered: number;
 }
@@ -61,9 +63,11 @@ export default function CreatePreOrderModal({
   // WhatsApp quick paste text state
   const [rawText, setRawText] = useState(
 `KAK DELLA
-spark flower(4)
-blush sparky(3)
-BW83(3)`
+PARIS JEPANG
+152(1)
+123(1)
+BABY TRYSPAN
+SPARK FLOWER(1)`
   );
 
   // Main Form States
@@ -102,6 +106,7 @@ BW83(3)`
             productId: null,
             productSku: '',
             productName: '',
+            categoryName: 'BABY TRYSPAN',
             price: 42000,
             quantityOrdered: 1,
           },
@@ -128,13 +133,28 @@ BW83(3)`
   );
 
   // Product Matching Helper
-  const findBestProductMatch = (query: string): ProductItem | null => {
+  const findBestProductMatch = (query: string, preferredCategory?: string): ProductItem | null => {
     const q = query.toLowerCase().trim();
     if (!q) return null;
     const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
+    // Category filter if preferredCategory exists
+    const candidateProducts = preferredCategory
+      ? products.filter((p) => {
+          const cat = preferredCategory.toLowerCase();
+          return (
+            p.name.toLowerCase().includes(cat) ||
+            (cat.includes('paris') && p.name.toLowerCase().includes('paris')) ||
+            (cat.includes('tryspan') && p.name.toLowerCase().includes('tryspan')) ||
+            (cat.includes('bella') && p.name.toLowerCase().includes('bella'))
+          );
+        })
+      : products;
+
+    const searchPool = candidateProducts.length > 0 ? candidateProducts : products;
+
     // 1. Exact SKU match
-    const exactSku = products.find(
+    const exactSku = searchPool.find(
       (p) =>
         p.sku.toLowerCase() === q ||
         (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
@@ -142,17 +162,17 @@ BW83(3)`
     if (exactSku) return exactSku;
 
     // 2. Exact Motif match
-    const exactMotif = products.find(
+    const exactMotif = searchPool.find(
       (p) => p.motif && p.motif.toLowerCase().trim() === q
     );
     if (exactMotif) return exactMotif;
 
     // 3. Exact Full Name match
-    const exactName = products.find((p) => p.name.toLowerCase().trim() === q);
+    const exactName = searchPool.find((p) => p.name.toLowerCase().trim() === q);
     if (exactName) return exactName;
 
     // 4. Exact Combined
-    const exactCombined = products.find((p) => {
+    const exactCombined = searchPool.find((p) => {
       const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
       const withColor = `${p.name} ${p.motif || ''} ${p.color || ''}`.toLowerCase().trim();
       const skuMotif = `${p.sku} ${p.motif || ''}`.toLowerCase().trim();
@@ -160,18 +180,18 @@ BW83(3)`
     });
     if (exactCombined) return exactCombined;
 
-    // 5. SKU prefix match
+    // 5. SKU prefix match (at least 3 chars)
     if (cleanQ.length >= 3) {
-      const prefixSku = products.find((p) => {
+      const prefixSku = searchPool.find((p) => {
         const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
         return pCleanSku === cleanQ || (pCleanSku.startsWith(cleanQ) && cleanQ.length >= 4);
       });
       if (prefixSku) return prefixSku;
     }
 
-    // 6. Name / Motif includes query
+    // 6. Name / Motif includes query (at least 4 chars)
     if (q.length >= 4) {
-      const nameContains = products.find((p) => {
+      const nameContains = searchPool.find((p) => {
         const pName = p.name.toLowerCase();
         const pMotif = p.motif ? p.motif.toLowerCase() : '';
         return pName.includes(q) || (pMotif && pMotif.includes(q));
@@ -202,13 +222,13 @@ BW83(3)`
     return 42000;
   };
 
-  // Recalculate tier prices
+  // Recalculate tier prices preserving custom prices
   const recalculateTierPrices = (currentItems: FormItem[]) => {
     const types = getStoredProductTypes();
     
     let totalResellerPoolQty = 0;
     currentItems.forEach((it) => {
-      const nameToCheck = it.productName || it.productSku;
+      const nameToCheck = it.categoryName || it.productName || it.productSku;
       if (!nameToCheck) return;
       const master = findProductMasterType(nameToCheck, types);
       if (!master || master.isResellerEligible) {
@@ -219,8 +239,9 @@ BW83(3)`
     const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
 
     const refreshed = currentItems.map((it) => {
-      const nameToCheck = it.productName || it.productSku;
-      if (!nameToCheck) return it;
+      if (it.isCustomPrice) return it;
+
+      const nameToCheck = it.categoryName || it.productName || it.productSku;
       const master = findProductMasterType(nameToCheck, types);
 
       if (master && !master.isResellerEligible) {
@@ -241,6 +262,13 @@ BW83(3)`
     setItems(refreshed);
   };
 
+  // Check if a line is a category section header (e.g. "PARIS JAPAN", "PARIS JEPANG", "BABY TRYSPAN", "BELLA SQUARE", "PJ")
+  const isCategoryHeaderLine = (line: string, typesList: ProductMasterType[]): ProductMasterType | null => {
+    const clean = line.trim().toUpperCase().replace(/[\*\[\]\(\)\:\-]/g, ' ').trim();
+    if (!clean) return null;
+    return findProductMasterType(clean, typesList);
+  };
+
   // Parse WhatsApp Text String Helper
   const parseWhatsAppStringToItems = (text: string) => {
     if (!text.trim()) return null;
@@ -253,24 +281,31 @@ BW83(3)`
 
     const rawCustomer = lines[0].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
     const itemLines = lines.slice(1);
-    const rawResultsMap = new Map<
-      string,
-      {
-        product?: ProductItem | null;
-        productSku: string;
-        productName: string;
-        price: number;
-        quantity: number;
-      }
-    >();
+    const types = getStoredProductTypes();
 
-    itemLines.forEach((line) => {
-      let itemName = line;
+    let currentCategory: ProductMasterType | null = null;
+    const parsedList: FormItem[] = [];
+
+    itemLines.forEach((line, lineIdx) => {
+      const cleanLine = line.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
+      if (!cleanLine) return;
+
+      // Check if this line is a section header (e.g. "PARIS JEPANG", "BABY TRYSPAN")
+      const matchedSection = isCategoryHeaderLine(cleanLine, types);
+      // Only treat as header if it has no quantity pattern like (1) or - 2
+      const hasQtyPattern = /\(\d+\)|\s+[-xX:]\s*\d+|\s+\d+\s*(?:pcs|pc|buah|bj)?$/i.test(cleanLine);
+
+      if (matchedSection && !hasQtyPattern) {
+        currentCategory = matchedSection;
+        return;
+      }
+
+      let itemName = cleanLine;
       let qty = 1;
 
-      const p1 = line.match(/^(.*?)\((\d+)\)\s*$/);
-      const p2 = line.match(/^(.*?)\s*[-xX:]\s*(\d+)\s*$/);
-      const p3 = line.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj)?$/i);
+      const p1 = cleanLine.match(/^(.*?)\((\d+)\)\s*$/);
+      const p2 = cleanLine.match(/^(.*?)\s*[-xX:]\s*(\d+)\s*$/);
+      const p3 = cleanLine.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj)?$/i);
 
       if (p1) {
         itemName = p1[1].trim();
@@ -286,44 +321,46 @@ BW83(3)`
       itemName = itemName.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
       if (!itemName) return;
 
-      const matched = findBestProductMatch(itemName);
-      const sku = matched ? matched.sku : itemName.toUpperCase();
-      const name = matched
-        ? matched.name + (matched.motif ? ` - ${matched.motif}` : '') + (matched.color ? ` (${matched.color})` : '')
-        : itemName;
-      const price = matched ? matched.sellingPrice || matched.wholesalePrice || 42000 : 42000;
-      const key = matched ? matched.id : sku;
-
-      if (rawResultsMap.has(key)) {
-        const exist = rawResultsMap.get(key)!;
-        exist.quantity += qty;
-      } else {
-        rawResultsMap.set(key, {
-          product: matched,
-          productSku: sku,
-          productName: name,
-          price,
-          quantity: qty,
-        });
+      // Inline category check (e.g. "PJ 152" or "PARIS 152")
+      let lineCategory = currentCategory;
+      const inlineMatched = findProductMasterType(itemName, types);
+      if (inlineMatched) {
+        lineCategory = inlineMatched;
       }
-    });
 
-    const parsedList: FormItem[] = Array.from(rawResultsMap.values()).map((r, idx) => ({
-      id: `item-${Date.now()}-${idx}`,
-      productId: r.product ? r.product.id : null,
-      productSku: r.productSku,
-      productName: r.productName,
-      price: r.price,
-      quantityOrdered: r.quantity,
-    }));
+      const categoryName = lineCategory?.name || 'BABY TRYSPAN';
+      const matchedProduct = findBestProductMatch(itemName, categoryName);
+
+      const sku = matchedProduct ? matchedProduct.sku : itemName.toUpperCase();
+      const displayName = matchedProduct
+        ? matchedProduct.name + (matchedProduct.motif ? ` - ${matchedProduct.motif}` : '') + (matchedProduct.color ? ` (${matchedProduct.color})` : '')
+        : `${categoryName} - ${itemName}`;
+
+      let initialPrice = 42000;
+      if (matchedProduct?.sellingPrice) {
+        initialPrice = matchedProduct.sellingPrice;
+      } else if (lineCategory && !lineCategory.isResellerEligible) {
+        initialPrice = lineCategory.defaultPrice || 85000;
+      }
+
+      parsedList.push({
+        id: `item-${Date.now()}-${lineIdx}`,
+        productId: matchedProduct ? matchedProduct.id : null,
+        productSku: sku,
+        productName: displayName,
+        categoryName,
+        price: initialPrice,
+        quantityOrdered: qty,
+        isCustomPrice: false,
+      });
+    });
 
     if (parsedList.length === 0) return null;
 
-    const types = getStoredProductTypes();
+    // Calculate reseller pool
     let totalResellerPoolQty = 0;
     parsedList.forEach((it) => {
-      const nameToCheck = it.productName || it.productSku;
-      if (!nameToCheck) return;
+      const nameToCheck = it.categoryName || it.productName || it.productSku;
       const master = findProductMasterType(nameToCheck, types);
       if (!master || master.isResellerEligible) {
         totalResellerPoolQty += Number(it.quantityOrdered) || 0;
@@ -333,8 +370,7 @@ BW83(3)`
     const resellerUnitPrice = getResellerTierPriceForTotalQty(totalResellerPoolQty, types);
 
     const refreshed = parsedList.map((it) => {
-      const nameToCheck = it.productName || it.productSku;
-      if (!nameToCheck) return it;
+      const nameToCheck = it.categoryName || it.productName || it.productSku;
       const master = findProductMasterType(nameToCheck, types);
 
       if (master && !master.isResellerEligible) {
@@ -364,7 +400,7 @@ BW83(3)`
     const textToParse = typeof customText === 'string' ? customText : rawText;
     const parsed = parseWhatsAppStringToItems(textToParse);
     if (!parsed) {
-      setError('Format teks belum sesuai. Baris 1: Nama Customer, Baris berikutnya: Nama motif / SKU & Jumlah pcs.');
+      setError('Format teks belum sesuai. Baris 1: Nama Customer, Baris berikutnya: Kategori/Header (cth: PARIS JEPANG / BABY TRYSPAN) dan Kode Motif & Qty.');
       return;
     }
 
@@ -379,14 +415,34 @@ BW83(3)`
 
   const handleSelectProduct = (index: number, prod: ProductItem) => {
     const updated = [...items];
+    const types = getStoredProductTypes();
+    const master = findProductMasterType(prod.name, types);
+
     updated[index] = {
       ...updated[index],
       productId: prod.id,
       productSku: prod.sku,
       productName: prod.name + (prod.motif ? ` - ${prod.motif}` : '') + (prod.color ? ` (${prod.color})` : ''),
+      categoryName: master?.name || (prod.name.toLowerCase().includes('paris') ? 'PARIS JAPAN' : 'BABY TRYSPAN'),
       price: prod.sellingPrice || prod.wholesalePrice || 42000,
     };
     setActiveDropdownIndex(null);
+    setItems(updated);
+    recalculateTierPrices(updated);
+  };
+
+  const handleToggleCategory = (index: number) => {
+    const types = getStoredProductTypes();
+    const current = items[index].categoryName || 'BABY TRYSPAN';
+    const currentIndex = types.findIndex((t) => t.name.toUpperCase() === current.toUpperCase());
+    const nextType = types[(currentIndex + 1) % types.length] || types[0];
+
+    const updated = [...items];
+    updated[index] = {
+      ...updated[index],
+      categoryName: nextType.name,
+      isCustomPrice: false,
+    };
     setItems(updated);
     recalculateTierPrices(updated);
   };
@@ -401,7 +457,21 @@ BW83(3)`
 
   const handlePriceChange = (index: number, price: number) => {
     const updated = [...items];
-    updated[index] = { ...updated[index], price: Math.max(0, price) };
+    updated[index] = {
+      ...updated[index],
+      price: Math.max(0, price),
+      isCustomPrice: true,
+    };
+    setItems(updated);
+  };
+
+  const handleItemNameChange = (index: number, name: string) => {
+    const updated = [...items];
+    updated[index] = {
+      ...updated[index],
+      productName: name,
+      productSku: updated[index].productSku || name.toUpperCase().replace(/\s+/g, '-'),
+    };
     setItems(updated);
   };
 
@@ -415,6 +485,7 @@ BW83(3)`
         productId: null,
         productSku: '',
         productName: '',
+        categoryName: 'BABY TRYSPAN',
         price: defaultUnitPrice,
         quantityOrdered: 1,
       },
@@ -575,23 +646,23 @@ BW83(3)`
                     <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Chat WhatsApp Customer:
                   </label>
                   <span className="text-[11px] text-slate-400">
-                    Baris 1 = Nama Customer, Baris berikutnya = Nama Motif/SKU & Qty
+                    Bisa campur kategori (PARIS JEPANG & BABY TRYSPAN)
                   </span>
                 </div>
 
                 <textarea
-                  rows={5}
+                  rows={6}
                   value={rawText}
                   onChange={(e) => {
                     setRawText(e.target.value);
                   }}
-                  placeholder="Contoh format:&#10;KAK DELLA&#10;spark flower(4)&#10;blush sparky(3)&#10;BW83(3)"
-                  className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  placeholder="Contoh format:&#10;KAK DELLA&#10;PARIS JEPANG&#10;152(1)&#10;123(1)&#10;BABY TRYSPAN&#10;SPARK FLOWER(1)"
+                  className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 leading-relaxed"
                 />
 
                 <div className="flex justify-between items-center pt-1">
                   <span className="text-[11px] text-indigo-700 font-medium">
-                    ✨ Klik tombol di samping untuk mengupdate preview jika baru copas teks baru
+                    ✨ Klik tombol di samping untuk refresh hasil jika baru paste teks baru
                   </span>
                   <button
                     type="button"
@@ -632,7 +703,7 @@ BW83(3)`
                 </div>
               </div>
 
-              {/* Live Parsed Preview Table */}
+              {/* Live Parsed Preview Table - FULLY INTERACTIVE & EDITABLE */}
               <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
@@ -640,38 +711,108 @@ BW83(3)`
                       <ShoppingBag className="w-3.5 h-3.5 text-indigo-600" /> Hasil Copas: {customerName ? `Customer "${customerName}"` : 'Belum Terdeteksi'}
                     </h4>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      {items.length} Motif / Produk • {totalQuantity} pcs • Harga Reseller Otomatis
+                      {items.length} Item • {totalQuantity} pcs • Bisa diedit/disesuaikan langsung di bawah:
                     </p>
                   </div>
-                  <span className="font-mono font-bold text-sm text-indigo-700">
-                    {formatRupiah(totalAmount)}
-                  </span>
+                  <div className="text-right">
+                    <span className="font-mono font-bold text-sm text-indigo-700">
+                      {formatRupiah(totalAmount)}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="divide-y divide-slate-100 bg-white rounded-xl border border-slate-200 overflow-hidden">
-                  {items.map((it, idx) => (
-                    <div key={it.id || idx} className="p-2.5 flex items-center justify-between gap-3 text-xs">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono font-bold text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-800 shrink-0">
-                          {it.productSku}
-                        </span>
-                        <span className="font-semibold text-slate-800 truncate">
-                          {it.productName}
-                        </span>
+                <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  {items.map((it, idx) => {
+                    const isParis = it.categoryName?.toUpperCase().includes('PARIS');
+                    const isBella = it.categoryName?.toUpperCase().includes('BELLA');
+
+                    return (
+                      <div key={it.id || idx} className="p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs hover:bg-slate-50/50 transition-colors">
+                        <div className="flex items-center gap-2 flex-1 min-w-0 w-full sm:w-auto">
+                          {/* Category Badge Toggle */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCategory(idx)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 transition-colors cursor-pointer border ${
+                              isParis
+                                ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                                : isBella
+                                ? 'bg-pink-50 text-pink-700 border-pink-200 hover:bg-pink-100'
+                                : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                            }`}
+                            title="Klik untuk ganti kategori (Baby Tryspan / Paris Japan / Bella)"
+                          >
+                            {it.categoryName || 'BABY TRYSPAN'}
+                          </button>
+
+                          {/* Editable Product Name */}
+                          <input
+                            type="text"
+                            value={it.productName}
+                            onChange={(e) => handleItemNameChange(idx, e.target.value)}
+                            placeholder="Nama motif / kode produk"
+                            className="font-semibold text-slate-800 bg-transparent hover:bg-slate-100 focus:bg-white focus:ring-1 focus:ring-indigo-500 px-2 py-1 rounded border border-transparent hover:border-slate-200 w-full"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-2.5 shrink-0 self-end sm:self-center">
+                          {/* Editable Qty */}
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="1"
+                              value={it.quantityOrdered}
+                              onChange={(e) => handleQuantityChange(idx, parseInt(e.target.value, 10) || 1)}
+                              className="w-14 px-2 py-1 rounded bg-slate-50 border border-slate-200 text-center font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500"
+                            />
+                            <span className="text-slate-400 text-[11px]">pcs</span>
+                          </div>
+
+                          {/* Editable Price */}
+                          <div className="relative">
+                            <span className="absolute left-1.5 top-1 text-[10px] text-slate-400">Rp</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={it.price}
+                              onChange={(e) => handlePriceChange(idx, parseInt(e.target.value, 10) || 0)}
+                              className="w-24 pl-6 pr-2 py-1 rounded bg-slate-50 border border-slate-200 font-bold text-slate-900 text-right focus:ring-1 focus:ring-indigo-500"
+                              title="Harga satuan (bisa diedit manual jika ada promo/khusus)"
+                            />
+                          </div>
+
+                          {/* Subtotal */}
+                          <span className="font-bold text-slate-900 w-20 text-right font-mono text-[11px]">
+                            {formatRupiah(it.price * it.quantityOrdered)}
+                          </span>
+
+                          {/* Delete Item */}
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItemRow(idx)}
+                            disabled={items.length <= 1}
+                            className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors disabled:opacity-20 cursor-pointer"
+                            title="Hapus baris"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0 text-right">
-                        <span className="font-bold text-slate-900 bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded">
-                          {it.quantityOrdered} pcs
-                        </span>
-                        <span className="text-slate-500 text-[11px]">
-                          @ {formatRupiah(it.price)}
-                        </span>
-                        <span className="font-bold text-slate-900 w-24">
-                          {formatRupiah(it.price * it.quantityOrdered)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+                </div>
+
+                <div className="flex justify-between items-center pt-1">
+                  <button
+                    type="button"
+                    onClick={handleAddItemRow}
+                    className="text-xs font-bold px-2.5 py-1 rounded-lg bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer shadow-2xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Tambah Baris Manual
+                  </button>
+                  <span className="text-[11px] text-slate-400 italic">
+                    💡 Tip: Klik label kategori berwarna untuk ganti Paris Japan / Baby Tryspan
+                  </span>
                 </div>
               </div>
             </div>

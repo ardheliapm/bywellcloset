@@ -26,7 +26,10 @@ export function isProductMatchItem(
   product: { id: string; sku: string; name: string; motif?: string | null },
   item: ItemReference
 ): boolean {
-  if (item.productId && item.productId === product.id) return true;
+  // If item already has a linked productId, it MUST match product.id
+  if (item.productId) {
+    return item.productId === product.id;
+  }
 
   const pSku = (product.sku || '').trim().toLowerCase();
   const pCleanSku = pSku.replace(/[^a-z0-9]/g, '');
@@ -35,25 +38,26 @@ export function isProductMatchItem(
   const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
 
   const itName = (item.productName || '').trim().toLowerCase();
+  const pName = (product.name || '').trim().toLowerCase();
   const pMotif = (product.motif || '').trim().toLowerCase();
 
-  // 1. Exact SKU match (e.g. "BW81" === "BW81")
+  // 1. Exact SKU match (case-insensitive, e.g. "118W" === "118w")
   if (itSku && pSku && itSku === pSku) return true;
 
-  // 2. Clean alphanumeric SKU exact match (e.g. "BW-81" === "bw81")
-  if (itCleanSku && pCleanSku && pCleanSku.length >= 2 && itCleanSku === pCleanSku) return true;
+  // 2. Clean alphanumeric SKU exact match (e.g. "BW-118" === "bw118" or "118w" === "118w")
+  if (itCleanSku && pCleanSku && itCleanSku === pCleanSku) return true;
 
   // 3. Exact Motif match (e.g. "SPARK FLOWER" === "SPARK FLOWER")
   if (pMotif && (itSku === pMotif || itName === pMotif)) return true;
 
-  // 4. Exact combined name & motif
+  // 4. Exact combined name & motif (e.g. "BABY TRYSPAN - SPARK FLOWER")
   const pFullName = `${product.name} ${product.motif || ''}`.trim().toLowerCase();
-  if (pFullName && (itName === pFullName || itSku === pFullName)) return true;
+  const pFullWithDash = `${product.name} - ${product.motif || ''}`.trim().toLowerCase();
+  if (itName === pFullName || itName === pFullWithDash) return true;
 
-  // 5. If item name contains product SKU as an exact token/word (e.g. "BABY TRYSPAN BW81")
-  if (pSku.length >= 3 && (itName === pSku || itName.includes(` ${pSku}`) || itName.includes(`${pSku} `) || itName.startsWith(`${pSku}-`))) {
-    return true;
-  }
+  // 5. If item SKU or Name is an exact match for product SKU + motif
+  const pSkuMotif = `${product.sku} ${product.motif || ''}`.trim().toLowerCase();
+  if (pSkuMotif && (itName === pSkuMotif || itSku === pSkuMotif)) return true;
 
   return false;
 }
