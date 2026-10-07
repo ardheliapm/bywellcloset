@@ -18,12 +18,19 @@ import {
   X,
   Trash2,
   Plus,
-  Edit3
+  Edit3,
+  Layers,
+  Boxes,
+  Send,
+  Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import InvoiceModal, { OrderDetail } from './InvoiceModal';
 import AddItemsModal from './AddItemsModal';
 import EditOrderModal from './EditOrderModal';
+import PreOrderInvoiceModal from '../pre-orders/PreOrderInvoiceModal';
+import ShipPreOrderModal from '../pre-orders/ShipPreOrderModal';
+import { PreOrderRecord, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
 import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
 
@@ -36,12 +43,20 @@ type DialogType = 'PAY' | 'SHIP' | 'CANCEL' | 'DELETE';
 
 export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'HOLD' | 'PAID' | 'SHIPPED' | 'CANCELLED'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [typeFilter, setTypeFilter] = useState<'ALL' | 'REGULAR' | 'PRE_ORDER'>('ALL');
   const [selectedMonth, setSelectedMonth] = useState<string>('ALL');
   const [selectedYear, setSelectedYear] = useState<string>('ALL');
+  
+  // Regular order modals
   const [selectedOrderForInvoice, setSelectedOrderForInvoice] = useState<OrderDetail | null>(null);
   const [selectedOrderForEdit, setSelectedOrderForEdit] = useState<OrderRecord | null>(null);
   const [addItemsOrder, setAddItemsOrder] = useState<OrderRecord | null>(null);
+  
+  // PO modals
+  const [selectedPoForInvoice, setSelectedPoForInvoice] = useState<PreOrderRecord | null>(null);
+  const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
+
   const [actionLoading, setActionLoading] = useState(false);
 
   // Month options in Indonesian
@@ -110,12 +125,15 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   }, [orders, selectedMonth, selectedYear]);
 
   // KPI Summary Counts (based on Month & Year date period)
-  const holdCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'HOLD').length, [dateFilteredOrders]);
-  const paidCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'PAID').length, [dateFilteredOrders]);
-  const shippedCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'SHIPPED').length, [dateFilteredOrders]);
+  const regularCount = useMemo(() => dateFilteredOrders.filter((o) => o.orderType !== 'PRE_ORDER').length, [dateFilteredOrders]);
+  const poCount = useMemo(() => dateFilteredOrders.filter((o) => o.orderType === 'PRE_ORDER').length, [dateFilteredOrders]);
+  
+  const holdCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'HOLD' || o.status === 'WAITING_STOCK').length, [dateFilteredOrders]);
+  const paidCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'PAID' || o.status === 'READY' || o.status === 'PARTIAL_READY').length, [dateFilteredOrders]);
+  const shippedCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'SHIPPED' || o.status === 'PARTIAL_SHIPPED').length, [dateFilteredOrders]);
   const cancelledCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'CANCELLED').length, [dateFilteredOrders]);
 
-  // Final Filtered Orders for Table (applying Search & Status Filter)
+  // Final Filtered Orders for Table (applying Search, Type & Status Filter)
   const filteredOrders = useMemo(() => {
     return dateFilteredOrders.filter((order) => {
       const matchesSearch =
@@ -127,19 +145,114 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           it.productSku.toLowerCase().includes(searchTerm.toLowerCase())
         );
 
-      const matchesStatus = statusFilter === 'ALL' ? true : order.status === statusFilter;
+      let matchesType = true;
+      if (typeFilter === 'REGULAR') {
+        matchesType = order.orderType !== 'PRE_ORDER';
+      } else if (typeFilter === 'PRE_ORDER') {
+        matchesType = order.orderType === 'PRE_ORDER';
+      }
 
-      return matchesSearch && matchesStatus;
+      let matchesStatus = true;
+      if (statusFilter === 'HOLD') {
+        matchesStatus = order.status === 'HOLD' || order.status === 'WAITING_STOCK';
+      } else if (statusFilter === 'PAID') {
+        matchesStatus = order.status === 'PAID' || order.status === 'READY' || order.status === 'PARTIAL_READY';
+      } else if (statusFilter === 'SHIPPED') {
+        matchesStatus = order.status === 'SHIPPED' || order.status === 'PARTIAL_SHIPPED';
+      } else if (statusFilter === 'CANCELLED') {
+        matchesStatus = order.status === 'CANCELLED';
+      } else if (statusFilter === 'PO_WAITING') {
+        matchesStatus = order.status === 'WAITING_STOCK';
+      } else if (statusFilter === 'PO_READY') {
+        matchesStatus = order.status === 'READY' || order.status === 'PARTIAL_READY';
+      }
+
+      return matchesSearch && matchesType && matchesStatus;
     });
-  }, [dateFilteredOrders, searchTerm, statusFilter]);
+  }, [dateFilteredOrders, searchTerm, typeFilter, statusFilter]);
 
-  const isFilterActive = searchTerm.trim() !== '' || statusFilter !== 'ALL' || selectedMonth !== 'ALL' || selectedYear !== 'ALL';
+  const isFilterActive = searchTerm.trim() !== '' || statusFilter !== 'ALL' || typeFilter !== 'ALL' || selectedMonth !== 'ALL' || selectedYear !== 'ALL';
 
   const handleResetFilter = () => {
     setSearchTerm('');
     setStatusFilter('ALL');
+    setTypeFilter('ALL');
     setSelectedMonth('ALL');
     setSelectedYear('ALL');
+  };
+
+  // Helper to open invoice modal for either regular order or PO
+  const handleOpenInvoice = (order: OrderRecord) => {
+    if (order.orderType === 'PRE_ORDER') {
+      const poData: PreOrderRecord = order.rawPreOrder || {
+        id: order.id,
+        poNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        status: order.status,
+        totalAmount: order.totalAmount,
+        notes: order.notes,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+        items: order.items.map((it) => ({
+          id: it.id,
+          preOrderId: order.id,
+          productId: it.productId,
+          productSku: it.productSku,
+          productName: it.productName,
+          price: it.price,
+          quantityOrdered: it.quantity,
+          quantityFulfilled: it.quantityFulfilled ?? 0,
+          quantityShipped: it.quantityShipped ?? 0,
+          subtotal: it.subtotal,
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+        })),
+      };
+      setSelectedPoForInvoice(poData);
+    } else {
+      setSelectedOrderForInvoice({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        status: order.status,
+        totalAmount: order.totalAmount,
+        notes: order.notes,
+        createdAt: order.createdAt,
+        items: order.items,
+      });
+    }
+  };
+
+  // Helper to open PO shipment modal
+  const handleOpenPoShipment = (order: OrderRecord) => {
+    const poData: PreOrderRecord = order.rawPreOrder || {
+      id: order.id,
+      poNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      items: order.items.map((it) => ({
+        id: it.id,
+        preOrderId: order.id,
+        productId: it.productId,
+        productSku: it.productSku,
+        productName: it.productName,
+        price: it.price,
+        quantityOrdered: it.quantity,
+        quantityFulfilled: it.quantityFulfilled ?? 0,
+        quantityShipped: it.quantityShipped ?? 0,
+        subtotal: it.subtotal,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      })),
+    };
+    setSelectedPoForShip(poData);
   };
 
   // Open confirmation modal
@@ -163,20 +276,34 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   // Execute confirmed action
   const handleExecuteAction = async () => {
     if (!confirmDialog.order) return;
-    const orderId = confirmDialog.order.id;
+    const order = confirmDialog.order;
+    const orderId = order.id;
+    const isPo = order.orderType === 'PRE_ORDER';
 
     setActionLoading(true);
     try {
       let res: { success: boolean; error?: string } = { success: true };
 
       if (confirmDialog.type === 'PAY') {
-        res = await markOrderAsPaid(orderId);
+        if (!isPo) {
+          res = await markOrderAsPaid(orderId);
+        }
       } else if (confirmDialog.type === 'SHIP') {
-        res = await markOrderAsShipped(orderId);
+        if (!isPo) {
+          res = await markOrderAsShipped(orderId);
+        }
       } else if (confirmDialog.type === 'CANCEL') {
-        res = await cancelOrder(orderId);
+        if (isPo) {
+          res = await cancelPreOrder(orderId);
+        } else {
+          res = await cancelOrder(orderId);
+        }
       } else if (confirmDialog.type === 'DELETE') {
-        res = await deleteOrder(orderId);
+        if (isPo) {
+          res = await deletePreOrder(orderId);
+        } else {
+          res = await deleteOrder(orderId);
+        }
       }
 
       if (!res.success) {
@@ -195,53 +322,68 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       {/* Action Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-1">
         <div>
-          <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center gap-2">
-            <span>Daftar Pesanan & Pengawasan Stok</span>
-          </h2>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 flex items-center justify-center">
+              <ShoppingBag className="w-5 h-5" />
+            </div>
+            Daftar Pesanan & Pengawasan Stok
+          </h1>
           <p className="text-slate-500 text-xs mt-0.5">
-            Kelola pesanan customer, verifikasi bukti transfer, potong stok otomatis, dan cetak invoice.
+            Semua pesanan customer (Order Reguler & Pre-Order PO) terpusat di sini dengan invoice WhatsApp & update stok real-time.
           </p>
         </div>
 
-        <Link
-          href="/paste-order"
-          className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm transition-colors inline-flex items-center gap-2 shadow-xs shrink-0 self-start sm:self-center"
-        >
-          <FileText className="w-4 h-4" /> + Paste Order Baru
-        </Link>
+        <div className="flex items-center gap-2 self-start sm:self-center">
+          <Link
+            href="/pre-orders"
+            className="px-3.5 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 text-indigo-700 font-bold text-xs transition-colors inline-flex items-center gap-1.5 shadow-2xs"
+          >
+            <Clock className="w-4 h-4 text-indigo-600" /> Buka Antrean PO
+          </Link>
+
+          <Link
+            href="/paste-order"
+            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors inline-flex items-center gap-2 shadow-xs"
+          >
+            <FileText className="w-4 h-4" /> + Paste Order Baru
+          </Link>
+        </div>
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Orders */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Order</p>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Pesanan</p>
             <p className="text-2xl font-bold text-slate-800 mt-0.5">{dateFilteredOrders.length}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {regularCount} Reguler • {poCount} Pre-Order (PO)
+            </p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center">
             <ShoppingBag className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Hold / Keep */}
+        {/* Hold / Menunggu */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider">Keep / Menunggu Bayar</p>
-            <p className="text-2xl font-bold text-amber-600 mt-0.5">{holdCount} Order</p>
-            <span className="text-[11px] text-amber-600/80">Stok sedang di-hold</span>
+            <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider">Keep / Menunggu</p>
+            <p className="text-2xl font-bold text-amber-600 mt-0.5">{holdCount} Pesanan</p>
+            <span className="text-[11px] text-amber-600/80">Belum bayar / nunggu stok PO</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
             <Clock className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Paid */}
+        {/* Paid / PO Ready */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
-            <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Sudah Bayar</p>
-            <p className="text-2xl font-bold text-emerald-600 mt-0.5">{paidCount} Order</p>
-            <span className="text-[11px] text-emerald-600/80">Siap dipacking/kirim</span>
+            <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Lunas / Ready Kirim</p>
+            <p className="text-2xl font-bold text-emerald-600 mt-0.5">{paidCount} Pesanan</p>
+            <span className="text-[11px] text-emerald-600/80">Siap dipacking & kirim</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
             <CheckCircle2 className="w-5 h-5" />
@@ -252,8 +394,8 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Sudah Dikirim</p>
-            <p className="text-2xl font-bold text-blue-600 mt-0.5">{shippedCount} Order</p>
-            <span className="text-[11px] text-blue-600/80">Di tangan ekspedisi</span>
+            <p className="text-2xl font-bold text-blue-600 mt-0.5">{shippedCount} Pesanan</p>
+            <span className="text-[11px] text-blue-600/80">Diserahkan ke ekspedisi</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
             <Truck className="w-5 h-5" />
@@ -271,11 +413,24 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
               <Search className="w-4 h-4 absolute left-3.5 top-2.5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Cari Customer, No. Order, SKU..."
+                placeholder="Cari Customer, No. Order/PO, SKU..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-9 pr-3.5 py-2 rounded-lg border border-slate-200 text-xs focus:outline-hidden focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
               />
+            </div>
+
+            {/* Type Filter Select */}
+            <div className="relative shrink-0">
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as any)}
+                className="appearance-none pl-3 pr-8 py-2 rounded-lg border border-indigo-200 bg-indigo-50/50 hover:bg-indigo-50 text-xs font-bold text-indigo-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500/20 cursor-pointer shadow-2xs"
+              >
+                <option value="ALL">Semua Jenis (Reguler & PO)</option>
+                <option value="REGULAR">📦 Hanya Reguler Ready ({regularCount})</option>
+                <option value="PRE_ORDER">⏳ Hanya Pre-Order PO ({poCount})</option>
+              </select>
             </div>
 
             {/* Month Select */}
@@ -316,7 +471,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
               <button
                 type="button"
                 onClick={handleResetFilter}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1 shrink-0"
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" /> Reset
               </button>
@@ -329,7 +484,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           <button
             type="button"
             onClick={() => setStatusFilter('ALL')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               statusFilter === 'ALL'
                 ? 'bg-white text-slate-800 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -341,7 +496,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           <button
             type="button"
             onClick={() => setStatusFilter('HOLD')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               statusFilter === 'HOLD'
                 ? 'bg-white text-amber-700 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -353,19 +508,19 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           <button
             type="button"
             onClick={() => setStatusFilter('PAID')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               statusFilter === 'PAID'
                 ? 'bg-white text-emerald-700 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
-            Sudah Bayar ({paidCount})
+            Lunas / Ready ({paidCount})
           </button>
 
           <button
             type="button"
             onClick={() => setStatusFilter('SHIPPED')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               statusFilter === 'SHIPPED'
                 ? 'bg-white text-blue-700 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -377,7 +532,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           <button
             type="button"
             onClick={() => setStatusFilter('CANCELLED')}
-            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               statusFilter === 'CANCELLED'
                 ? 'bg-white text-slate-700 shadow-xs'
                 : 'text-slate-500 hover:text-slate-800'
@@ -400,24 +555,16 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
             </h3>
             <p className="text-slate-500 text-sm max-w-sm mx-auto">
               {orders.length === 0
-                ? 'Buka menu "Paste Order WhatsApp" untuk menempelkan pesanan pertama Anda.'
+                ? 'Buka menu "Paste Order WhatsApp" atau "Pre-Order" untuk mencatat pesanan pertama Anda.'
                 : 'Coba ubah kata kunci pencarian atau tab filter status.'}
             </p>
-            {orders.length === 0 && (
-              <Link
-                href="/paste-order"
-                className="mt-2 px-4 py-2 rounded-xl bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 transition-colors inline-flex items-center gap-2"
-              >
-                <FileText className="w-4 h-4" /> Buka Paste Order WhatsApp
-              </Link>
-            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/80 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3.5 px-4">No. Order & Tanggal</th>
+                  <th className="py-3.5 px-4">No. Order / PO & Tanggal</th>
                   <th className="py-3.5 px-4">Customer</th>
                   <th className="py-3.5 px-4">Produk Dipesan</th>
                   <th className="py-3.5 px-4 text-right">Total Tagihan</th>
@@ -427,14 +574,44 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {filteredOrders.map((order) => {
+                  const isPo = order.orderType === 'PRE_ORDER';
+                  const poReadyPcs = isPo
+                    ? order.items.reduce(
+                        (acc, it) => acc + Math.max(0, (it.quantityFulfilled ?? 0) - (it.quantityShipped ?? 0)),
+                        0
+                      )
+                    : 0;
+
                   return (
-                    <tr key={order.id} className="hover:bg-slate-50/60 transition-colors">
-                      {/* Order Number & Date */}
+                    <tr
+                      key={order.id}
+                      className={`hover:bg-slate-50/70 transition-colors ${
+                        isPo ? 'bg-indigo-50/20' : ''
+                      }`}
+                    >
+                      {/* Order Number, Type Badge & Date */}
                       <td className="py-3.5 px-4">
-                        <div className="font-mono font-bold text-slate-900 text-xs tracking-wider">
-                          #{order.orderNumber}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`font-mono font-bold text-xs tracking-wider ${
+                              isPo ? 'text-indigo-900' : 'text-slate-900'
+                            }`}
+                          >
+                            #{order.orderNumber}
+                          </span>
+
+                          {isPo ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200 shadow-2xs">
+                              <Clock className="w-2.5 h-2.5 text-indigo-600" /> PO (Pre-Order)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                              Reguler
+                            </span>
+                          )}
                         </div>
-                        <div className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
+
+                        <div className="text-xs text-slate-400 mt-1 flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
                           {new Date(order.createdAt).toLocaleDateString('id-ID', {
                             day: 'numeric',
@@ -466,7 +643,13 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                                 <strong className="font-mono text-slate-900">{it.productSku}</strong> - {it.productName}
                               </span>
                               <span className="text-slate-500 font-semibold shrink-0">
-                                {it.quantity}x
+                                {isPo && it.quantityFulfilled !== undefined ? (
+                                  <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-1 py-0.5 rounded">
+                                    {it.quantityFulfilled}/{it.quantity} ready
+                                  </span>
+                                ) : (
+                                  `${it.quantity}x`
+                                )}
                               </span>
                             </div>
                           ))}
@@ -480,43 +663,95 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
 
                       {/* Status Badge */}
                       <td className="py-3.5 px-4 text-center">
-                        {order.status === 'HOLD' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            <Clock className="w-3 h-3" /> Keep / Hold
-                          </span>
+                        {/* Regular Order Statuses */}
+                        {!isPo && (
+                          <>
+                            {order.status === 'HOLD' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                <Clock className="w-3 h-3" /> Keep / Hold
+                              </span>
+                            )}
+                            {order.status === 'PAID' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3" /> Sudah Bayar
+                              </span>
+                            )}
+                            {order.status === 'SHIPPED' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                <Truck className="w-3 h-3" /> Sudah Kirim
+                              </span>
+                            )}
+                            {order.status === 'CANCELLED' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                <XCircle className="w-3 h-3" /> Dibatalkan
+                              </span>
+                            )}
+                          </>
                         )}
-                        {order.status === 'PAID' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3" /> Sudah Bayar
-                          </span>
-                        )}
-                        {order.status === 'SHIPPED' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                            <Truck className="w-3 h-3" /> Sudah Kirim
-                          </span>
-                        )}
-                        {order.status === 'CANCELLED' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                            <XCircle className="w-3 h-3" /> Dibatalkan
-                          </span>
+
+                        {/* Pre-Order Specific Statuses */}
+                        {isPo && (
+                          <>
+                            {order.status === 'WAITING_STOCK' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                <Clock className="w-3 h-3" /> Menunggu Barang PO
+                              </span>
+                            )}
+                            {(order.status === 'PARTIAL_READY' || order.status === 'PARTIAL_SHIPPED') && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
+                                <Layers className="w-3 h-3" /> PO: Sebagian Ready ({poReadyPcs} pcs)
+                              </span>
+                            )}
+                            {order.status === 'READY' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3" /> PO: Siap Kirim Full
+                              </span>
+                            )}
+                            {order.status === 'SHIPPED' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                <Truck className="w-3 h-3" /> Sudah Dikirim
+                              </span>
+                            )}
+                            {order.status === 'CANCELLED' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                <XCircle className="w-3 h-3" /> Dibatalkan
+                              </span>
+                            )}
+                          </>
                         )}
                       </td>
 
                       {/* Actions */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                          {/* Invoice Button */}
+                          {/* Universal Invoice Button with WA for both Regular & PO */}
                           <button
                             type="button"
-                            onClick={() => setSelectedOrderForInvoice(order)}
-                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs"
-                            title="Buka Invoice & Teks WhatsApp"
+                            onClick={() => handleOpenInvoice(order)}
+                            className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer ${
+                              isPo
+                                ? 'border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800'
+                                : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                            }`}
+                            title="Buka Invoice & Kirim WhatsApp"
                           >
-                            <FileText className="w-3.5 h-3.5 text-rose-500" /> Invoice
+                            <FileText className={`w-3.5 h-3.5 ${isPo ? 'text-indigo-600' : 'text-rose-500'}`} /> Invoice
                           </button>
 
-                          {/* Action: Edit Order (for any order that is HOLD or PAID / not yet shipped) */}
-                          {(order.status === 'HOLD' || order.status === 'PAID') && (
+                          {/* Pre-Order Specific Actions */}
+                          {isPo && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPoShipment(order)}
+                              className="px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title={`Kirim ${poReadyPcs} pcs barang PO yang sudah ready`}
+                            >
+                              <Truck className="w-3.5 h-3.5" /> Kirim ({poReadyPcs})
+                            </button>
+                          )}
+
+                          {/* Regular Order Specific Actions: Edit */}
+                          {!isPo && (order.status === 'HOLD' || order.status === 'PAID') && (
                             <button
                               type="button"
                               onClick={() => setSelectedOrderForEdit(order)}
@@ -527,60 +762,60 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             </button>
                           )}
 
-                          {/* Action: Add Items if HOLD */}
-                          {order.status === 'HOLD' && (
+                          {/* Regular Order Specific Actions: Add Items */}
+                          {!isPo && order.status === 'HOLD' && (
                             <button
                               type="button"
                               onClick={() => setAddItemsOrder(order)}
-                              className="px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs"
+                              className="px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
                               title="Tambah item ke order ini"
                             >
                               <Plus className="w-3.5 h-3.5" /> Tambah
                             </button>
                           )}
 
-                          {/* Action: Mark as Paid if HOLD */}
-                          {order.status === 'HOLD' && (
+                          {/* Regular Order Specific Actions: Mark Paid */}
+                          {!isPo && order.status === 'HOLD' && (
                             <button
                               type="button"
                               onClick={() => openConfirmModal('PAY', order)}
-                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs"
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
                               title="Tandai pesanan lunas & potong stok fisik"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" /> Bayar
                             </button>
                           )}
 
-                          {/* Action: Mark as Shipped if PAID */}
-                          {order.status === 'PAID' && (
+                          {/* Regular Order Specific Actions: Mark Shipped */}
+                          {!isPo && order.status === 'PAID' && (
                             <button
                               type="button"
                               onClick={() => openConfirmModal('SHIP', order)}
-                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs"
+                              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
                               title="Tandai pesanan sudah dikirim ke ekspedisi"
                             >
                               <Truck className="w-3.5 h-3.5" /> Kirim
                             </button>
                           )}
 
-                          {/* Action: Cancel Order (if not cancelled) */}
-                          {order.status !== 'CANCELLED' && (
+                          {/* Universal Cancel Action */}
+                          {order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
                             <button
                               type="button"
                               onClick={() => openConfirmModal('CANCEL', order)}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
                               title="Batalkan Pesanan (Lepas stok hold)"
                             >
                               <XCircle className="w-4 h-4" />
                             </button>
                           )}
 
-                          {/* Action: Delete Order (if CANCELLED, else disabled hint) */}
+                          {/* Universal Delete Action */}
                           {order.status === 'CANCELLED' ? (
                             <button
                               type="button"
                               onClick={() => openConfirmModal('DELETE', order)}
-                              className="p-1.5 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 transition-colors border border-rose-200 bg-rose-50/50 shadow-2xs"
+                              className="p-1.5 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 transition-colors border border-rose-200 bg-rose-50/50 shadow-2xs cursor-pointer"
                               title="Hapus pesanan yang dibatalkan ini secara permanen"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -589,7 +824,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             <button
                               type="button"
                               onClick={() => alert('Pesanan harus dibatalkan terlebih dahulu sebelum dapat dihapus!')}
-                              className="p-1.5 rounded-lg text-slate-300 hover:text-slate-400 hover:bg-slate-50 transition-colors"
+                              className="p-1.5 rounded-lg text-slate-300 hover:text-slate-400 hover:bg-slate-50 transition-colors cursor-pointer"
                               title="Hanya pesanan yang sudah dibatalkan yang dapat dihapus"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -606,7 +841,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         )}
       </div>
 
-      {/* Invoice Modal */}
+      {/* Regular Invoice Modal */}
       {selectedOrderForInvoice && (
         <InvoiceModal
           isOpen={Boolean(selectedOrderForInvoice)}
@@ -615,7 +850,25 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         />
       )}
 
-      {/* Add Items Modal */}
+      {/* Pre-Order Invoice Modal with Full WA & Payment Details */}
+      {selectedPoForInvoice && (
+        <PreOrderInvoiceModal
+          isOpen={Boolean(selectedPoForInvoice)}
+          onClose={() => setSelectedPoForInvoice(null)}
+          preOrder={selectedPoForInvoice}
+        />
+      )}
+
+      {/* Pre-Order Ship Modal */}
+      {selectedPoForShip && (
+        <ShipPreOrderModal
+          isOpen={Boolean(selectedPoForShip)}
+          onClose={() => setSelectedPoForShip(null)}
+          preOrder={selectedPoForShip}
+        />
+      )}
+
+      {/* Add Items Modal (Regular) */}
       {addItemsOrder && (
         <AddItemsModal
           isOpen={Boolean(addItemsOrder)}
@@ -624,7 +877,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         />
       )}
 
-      {/* Edit Order Modal */}
+      {/* Edit Order Modal (Regular) */}
       {selectedOrderForEdit && (
         <EditOrderModal
           isOpen={Boolean(selectedOrderForEdit)}
@@ -634,7 +887,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         />
       )}
 
-      {/* Modern In-App Confirmation Modal (Replaces browser window.confirm) */}
+      {/* Modern In-App Confirmation Modal */}
       {confirmDialog.isOpen && confirmDialog.order && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-100 p-6 space-y-4">
@@ -664,7 +917,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
               <h3 className="text-lg font-bold text-slate-800">
                 {confirmDialog.type === 'PAY' && 'Konfirmasi Pelunasan Order'}
                 {confirmDialog.type === 'SHIP' && 'Konfirmasi Pengiriman Paket'}
-                {confirmDialog.type === 'CANCEL' && 'Konfirmasi Pembatalan Order'}
+                {confirmDialog.type === 'CANCEL' && 'Konfirmasi Pembatalan'}
                 {confirmDialog.type === 'DELETE' && 'Hapus Pesanan Permanen'}
               </h3>
 
@@ -681,12 +934,12 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                 )}
                 {confirmDialog.type === 'CANCEL' && (
                   <>
-                    Yakin ingin membatalkan pesanan <strong>#{confirmDialog.order.orderNumber}</strong> ({confirmDialog.order.customerName})?
+                    Yakin ingin membatalkan pesanan <strong>#{confirmDialog.order.orderNumber}</strong> ({confirmDialog.order.customerName})? Stok yang di-hold akan otomatis dikembalikan.
                   </>
                 )}
                 {confirmDialog.type === 'DELETE' && (
                   <>
-                    Apakah Anda yakin ingin <span className="text-rose-600 font-bold">menghapus permanen</span> pesanan <strong>#{confirmDialog.order.orderNumber}</strong> ({confirmDialog.order.customerName})?
+                    Apakah Anda yakin ingin <span className="text-rose-600 font-bold">menghapus permanen</span> data <strong>#{confirmDialog.order.orderNumber}</strong> ({confirmDialog.order.customerName})?
                   </>
                 )}
               </p>
@@ -694,6 +947,12 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
 
             {/* Order Highlight Box */}
             <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200/80 text-xs space-y-1.5">
+              <div className="flex justify-between text-slate-500">
+                <span>Jenis:</span>
+                <strong className={confirmDialog.order.orderType === 'PRE_ORDER' ? 'text-indigo-700' : 'text-slate-800'}>
+                  {confirmDialog.order.orderType === 'PRE_ORDER' ? 'Pre-Order (PO)' : 'Order Reguler'}
+                </strong>
+              </div>
               <div className="flex justify-between text-slate-500">
                 <span>Customer:</span>
                 <strong className="text-slate-800">{confirmDialog.order.customerName}</strong>
@@ -710,48 +969,13 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
               </div>
             </div>
 
-            {/* Explanatory Note on Stock Impact */}
-            <div className={`p-3 rounded-xl text-xs space-y-1 border ${
-              confirmDialog.type === 'PAY' 
-                ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800'
-                : confirmDialog.type === 'SHIP'
-                ? 'bg-blue-50/70 border-blue-200 text-blue-800'
-                : confirmDialog.type === 'CANCEL'
-                ? 'bg-amber-50/70 border-amber-200 text-amber-800'
-                : 'bg-rose-50/70 border-rose-200 text-rose-800'
-            }`}>
-              <p className="font-semibold">💡 Catatan Sistem:</p>
-              {confirmDialog.type === 'PAY' && (
-                <p>
-                  • <strong>Stok Fisik Gudang</strong> akan otomatis dipotong sebesar pesanan.<br />
-                  • <strong>Stok Keep / Hold</strong> akan dilepaskan karena barang sah terjual.
-                </p>
-              )}
-              {confirmDialog.type === 'SHIP' && (
-                <p>
-                  • Status order berubah menjadi <strong>SUDAH DIKIRIM</strong>.<br />
-                  • Stok sudah terpotong sejak pembayaran.
-                </p>
-              )}
-              {confirmDialog.type === 'CANCEL' && (
-                <p>
-                  • Stok yang sebelumnya di-hold akan <strong>otomatis dikembalikan</strong> ke stok siap jual (Available Stock).
-                </p>
-              )}
-              {confirmDialog.type === 'DELETE' && (
-                <p className="text-rose-700 font-medium">
-                  • <strong>Hapus Permanen</strong>: Data order ini akan dihapus permanen dari basis data. Tindakan ini tidak dapat dibatalkan.
-                </p>
-              )}
-            </div>
-
             {/* Modal Actions */}
             <div className="pt-2 flex items-center justify-end gap-3">
               <button
                 type="button"
                 disabled={actionLoading}
                 onClick={closeConfirmModal}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition-colors"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 Batal
               </button>
@@ -760,7 +984,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                 type="button"
                 disabled={actionLoading}
                 onClick={handleExecuteAction}
-                className={`px-5 py-2.5 rounded-xl text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 ${
+                className={`px-5 py-2.5 rounded-xl text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer ${
                   confirmDialog.type === 'PAY'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
                     : confirmDialog.type === 'SHIP'
@@ -782,7 +1006,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                     {confirmDialog.type === 'DELETE' && <Trash2 className="w-3.5 h-3.5" />}
                     {confirmDialog.type === 'PAY' && 'Ya, Konfirmasi Lunas'}
                     {confirmDialog.type === 'SHIP' && 'Ya, Tandai Dikirim'}
-                    {confirmDialog.type === 'CANCEL' && 'Ya, Batalkan Order'}
+                    {confirmDialog.type === 'CANCEL' && 'Ya, Batalkan'}
                     {confirmDialog.type === 'DELETE' && 'Ya, Hapus Permanen'}
                   </>
                 )}
@@ -794,3 +1018,4 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
     </div>
   );
 }
+

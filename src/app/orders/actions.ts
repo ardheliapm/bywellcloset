@@ -12,6 +12,8 @@ export interface OrderItemRecord {
   price: number;
   quantity: number;
   subtotal: number;
+  quantityFulfilled?: number;
+  quantityShipped?: number;
 }
 
 export interface OrderRecord {
@@ -19,7 +21,7 @@ export interface OrderRecord {
   orderNumber: string;
   customerName: string;
   customerPhone: string | null;
-  status: string; // HOLD, PAID, SHIPPED, CANCELLED
+  status: string; // HOLD, PAID, SHIPPED, CANCELLED, WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED
   totalAmount: number;
   notes: string | null;
   paidAt: Date | null;
@@ -27,20 +29,80 @@ export interface OrderRecord {
   createdAt: Date;
   updatedAt: Date;
   items: OrderItemRecord[];
+  orderType?: 'REGULAR' | 'PRE_ORDER';
+  rawPreOrder?: any;
 }
 
 export async function getOrders(): Promise<OrderRecord[]> {
   try {
-    const orders = await prisma.order.findMany({
-      include: {
-        items: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const [orders, preOrders] = await Promise.all([
+      prisma.order.findMany({
+        include: {
+          items: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.preOrder.findMany({
+        include: {
+          items: {
+            include: {
+              product: {
+                select: {
+                  id: true,
+                  sku: true,
+                  name: true,
+                  physicalStock: true,
+                  reservedStock: true,
+                },
+              },
+            },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
 
-    return orders;
+    const mappedRegularOrders: OrderRecord[] = orders.map((o) => ({
+      ...o,
+      orderType: 'REGULAR',
+    }));
+
+    const mappedPreOrders: OrderRecord[] = preOrders.map((po) => ({
+      id: po.id,
+      orderNumber: po.poNumber,
+      customerName: po.customerName,
+      customerPhone: po.customerPhone,
+      status: po.status,
+      totalAmount: po.totalAmount,
+      notes: po.notes,
+      paidAt: null,
+      shippedAt: null,
+      createdAt: po.createdAt,
+      updatedAt: po.updatedAt,
+      items: po.items.map((it) => ({
+        id: it.id,
+        orderId: po.id,
+        productId: it.productId,
+        productSku: it.productSku,
+        productName: it.productName,
+        price: it.price,
+        quantity: it.quantityOrdered,
+        subtotal: it.subtotal,
+        quantityFulfilled: it.quantityFulfilled,
+        quantityShipped: it.quantityShipped,
+      })),
+      orderType: 'PRE_ORDER',
+      rawPreOrder: po,
+    }));
+
+    const allOrders = [...mappedRegularOrders, ...mappedPreOrders].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    return allOrders;
   } catch (error) {
-    console.error('Error fetching orders:', error);
+    console.error('Error fetching orders & pre-orders:', error);
     return [];
   }
 }
