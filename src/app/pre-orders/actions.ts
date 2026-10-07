@@ -777,4 +777,148 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
   }
 }
 
+export interface AddPreOrderItemInput {
+  productId?: string | null;
+  productSku: string;
+  productName: string;
+  price: number;
+  quantityOrdered: number;
+}
+
+export async function addItemsToPreOrder(
+  preOrderId: string,
+  newItems: AddPreOrderItemInput[]
+) {
+  try {
+    if (!newItems || newItems.length === 0) {
+      return { success: false, error: 'Belum ada item yang ditambahkan.' };
+    }
+
+    const po = await prisma.preOrder.findUnique({
+      where: { id: preOrderId },
+      include: { items: true },
+    });
+
+    if (!po) {
+      return { success: false, error: 'Data Pre-Order tidak ditemukan.' };
+    }
+
+    if (po.status === 'SHIPPED') {
+      return {
+        success: false,
+        error: 'Pre-Order yang sudah dikirim semua (SHIPPED) tidak dapat ditambah item lagi.',
+      };
+    }
+
+    if (po.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: 'Pre-Order yang sudah dibatalkan tidak dapat ditambah item.',
+      };
+    }
+
+    const cleanItems = newItems
+      .filter((it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0)
+      .map((it) => ({
+        productId: it.productId || null,
+        productSku: (it.productSku || it.productName || 'PO-ITEM').trim().toUpperCase(),
+        productName: (it.productName || it.productSku || 'Produk PO').trim(),
+        price: Math.max(0, Math.floor(Number(it.price) || 0)),
+        quantityOrdered: Math.max(1, Math.floor(Number(it.quantityOrdered) || 1)),
+      }));
+
+    if (cleanItems.length === 0) {
+      return { success: false, error: 'Minimal harus ada 1 produk yang valid untuk ditambahkan.' };
+    }
+
+    await prisma.$transaction(
+      async (tx) => {
+        const allActiveProducts = await tx.product.findMany({
+          where: { isActive: true },
+        });
+
+        let additionalAmount = 0;
+        let totalPcsOrdered = po.items.reduce((acc, it) => acc + it.quantityOrdered, 0);
+        let totalPcsFulfilled = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
+        let totalPcsShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
+
+        for (const it of cleanItems) {
+          const matchedProd = allActiveProducts.find((p) =>
+            isProductMatchItem(p, { productSku: it.productSku, productName: it.productName })
+          );
+          const prodId = matchedProd ? matchedProd.id : it.productId || null;
+
+          // Check if available stock in warehouse can fulfill now
+          let initialFulfilled = 0;
+          if (matchedProd) {
+            const availableNow = Math.max(0, matchedProd.physicalStock - matchedProd.reservedStock);
+            if (availableNow > 0) {
+              initialFulfilled = Math.min(it.quantityOrdered, availableNow);
+              await tx.product.update({
+                where: { id: matchedProd.id },
+                data: {
+                  reservedStock: { increment: initialFulfilled },
+                },
+              });
+              matchedProd.reservedStock += initialFulfilled;
+            }
+          }
+
+          const subtotal = Math.floor(it.price * it.quantityOrdered);
+          additionalAmount += subtotal;
+          totalPcsOrdered += it.quantityOrdered;
+          totalPcsFulfilled += initialFulfilled;
+
+          await tx.preOrderItem.create({
+            data: {
+              preOrderId,
+              productId: prodId,
+              productSku: it.productSku,
+              productName: it.productName,
+              price: it.price,
+              quantityOrdered: it.quantityOrdered,
+              quantityFulfilled: initialFulfilled,
+              quantityShipped: 0,
+              subtotal,
+            },
+          });
+        }
+
+        const newTotalAmount = po.totalAmount + additionalAmount;
+
+        // Determine new PO status
+        let nextStatus = 'WAITING_STOCK';
+        if (totalPcsShipped >= totalPcsOrdered && totalPcsOrdered > 0) {
+          nextStatus = 'SHIPPED';
+        } else if (totalPcsFulfilled >= totalPcsOrdered && totalPcsOrdered > 0) {
+          nextStatus = 'READY';
+        } else if (totalPcsFulfilled > 0 || totalPcsShipped > 0) {
+          nextStatus = totalPcsShipped > 0 ? 'PARTIAL_SHIPPED' : 'PARTIAL_READY';
+        }
+
+        await tx.preOrder.update({
+          where: { id: preOrderId },
+          data: {
+            totalAmount: newTotalAmount,
+            status: nextStatus,
+          },
+        });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
+
+    revalidatePath('/pre-orders');
+    revalidatePath('/orders');
+    revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error adding items to pre-order:', error);
+    return { success: false, error: error.message || 'Gagal menambahkan item ke Pre-Order' };
+  }
+}
+
+
 

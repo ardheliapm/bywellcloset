@@ -28,6 +28,7 @@ import CreatePreOrderModal from './CreatePreOrderModal';
 import PreOrderInvoiceModal from './PreOrderInvoiceModal';
 import ShipPreOrderModal from './ShipPreOrderModal';
 import EditPreOrderModal from './EditPreOrderModal';
+import AddPreOrderItemsModal from './AddPreOrderItemsModal';
 
 interface PreOrdersClientProps {
   initialPreOrders: PreOrderRecord[];
@@ -48,6 +49,7 @@ export default function PreOrdersClient({
   const [selectedPoForInvoice, setSelectedPoForInvoice] = useState<PreOrderRecord | null>(null);
   const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
   const [selectedPoForEdit, setSelectedPoForEdit] = useState<PreOrderRecord | null>(null);
+  const [selectedPoForAddItems, setSelectedPoForAddItems] = useState<PreOrderRecord | null>(null);
 
   // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -525,6 +527,18 @@ export default function PreOrdersClient({
                             </button>
                           )}
 
+                          {/* + Tambah Item ke PO (seperti di daftar order) */}
+                          {po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPoForAddItems(po)}
+                              className="px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Tambah item baru ke antrean PO ini (Paste WA / Manual)"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Tambah
+                            </button>
+                          )}
+
                           {/* Kirim Barang Ready */}
                           {readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
                             <button
@@ -594,6 +608,13 @@ export default function PreOrdersClient({
         isOpen={Boolean(selectedPoForEdit)}
         onClose={() => setSelectedPoForEdit(null)}
         preOrder={selectedPoForEdit}
+        products={products}
+      />
+
+      <AddPreOrderItemsModal
+        isOpen={Boolean(selectedPoForAddItems)}
+        onClose={() => setSelectedPoForAddItems(null)}
+        preOrder={selectedPoForAddItems}
         products={products}
       />
 

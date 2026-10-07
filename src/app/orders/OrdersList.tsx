@@ -31,6 +31,7 @@ import EditOrderModal from './EditOrderModal';
 import PreOrderInvoiceModal from '../pre-orders/PreOrderInvoiceModal';
 import ShipPreOrderModal from '../pre-orders/ShipPreOrderModal';
 import EditPreOrderModal from '../pre-orders/EditPreOrderModal';
+import AddPreOrderItemsModal from '../pre-orders/AddPreOrderItemsModal';
 import { PreOrderRecord, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
 import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
@@ -58,6 +59,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   const [selectedPoForInvoice, setSelectedPoForInvoice] = useState<PreOrderRecord | null>(null);
   const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
   const [selectedPoForEdit, setSelectedPoForEdit] = useState<PreOrderRecord | null>(null);
+  const [selectedPoForAddItems, setSelectedPoForAddItems] = useState<PreOrderRecord | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -285,6 +287,36 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       })),
     };
     setSelectedPoForEdit(poData);
+  };
+
+  // Helper to open PO add items modal
+  const handleOpenPoAddItems = (order: OrderRecord) => {
+    const poData: PreOrderRecord = order.rawPreOrder || {
+      id: order.id,
+      poNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      items: order.items.map((it) => ({
+        id: it.id,
+        preOrderId: order.id,
+        productId: it.productId,
+        productSku: it.productSku,
+        productName: it.productName,
+        price: it.price,
+        quantityOrdered: it.quantity,
+        quantityFulfilled: it.quantityFulfilled ?? 0,
+        quantityShipped: it.quantityShipped ?? 0,
+        subtotal: it.subtotal,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      })),
+    };
+    setSelectedPoForAddItems(poData);
   };
 
   // Open confirmation modal
@@ -838,6 +870,18 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             </button>
                           )}
 
+                          {/* Pre-Order Specific Actions: Add Items */}
+                          {isPo && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPoAddItems(order)}
+                              className="px-2.5 py-1.5 rounded-lg border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Tambah item baru ke antrean PO ini (Paste WA / Manual)"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Tambah
+                            </button>
+                          )}
+
                           {/* Pre-Order Specific Actions: Ship */}
                           {isPo && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
                             <button
@@ -974,6 +1018,16 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           isOpen={Boolean(selectedPoForEdit)}
           onClose={() => setSelectedPoForEdit(null)}
           preOrder={selectedPoForEdit}
+          products={products}
+        />
+      )}
+
+      {/* Pre-Order Add Items Modal */}
+      {selectedPoForAddItems && (
+        <AddPreOrderItemsModal
+          isOpen={Boolean(selectedPoForAddItems)}
+          onClose={() => setSelectedPoForAddItems(null)}
+          preOrder={selectedPoForAddItems}
           products={products}
         />
       )}
