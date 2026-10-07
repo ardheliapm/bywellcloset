@@ -30,6 +30,7 @@ import AddItemsModal from './AddItemsModal';
 import EditOrderModal from './EditOrderModal';
 import PreOrderInvoiceModal from '../pre-orders/PreOrderInvoiceModal';
 import ShipPreOrderModal from '../pre-orders/ShipPreOrderModal';
+import EditPreOrderModal from '../pre-orders/EditPreOrderModal';
 import { PreOrderRecord, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
 import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
@@ -56,6 +57,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   // PO modals
   const [selectedPoForInvoice, setSelectedPoForInvoice] = useState<PreOrderRecord | null>(null);
   const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
+  const [selectedPoForEdit, setSelectedPoForEdit] = useState<PreOrderRecord | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -253,6 +255,36 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       })),
     };
     setSelectedPoForShip(poData);
+  };
+
+  // Helper to open PO edit modal
+  const handleOpenPoEdit = (order: OrderRecord) => {
+    const poData: PreOrderRecord = order.rawPreOrder || {
+      id: order.id,
+      poNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      items: order.items.map((it) => ({
+        id: it.id,
+        preOrderId: order.id,
+        productId: it.productId,
+        productSku: it.productSku,
+        productName: it.productName,
+        price: it.price,
+        quantityOrdered: it.quantity,
+        quantityFulfilled: it.quantityFulfilled ?? 0,
+        quantityShipped: it.quantityShipped ?? 0,
+        subtotal: it.subtotal,
+        createdAt: order.createdAt,
+        updatedAt: order.updatedAt,
+      })),
+    };
+    setSelectedPoForEdit(poData);
   };
 
   // Open confirmation modal
@@ -794,7 +826,19 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             <FileText className={`w-3.5 h-3.5 ${isPo ? 'text-indigo-600' : 'text-rose-500'}`} /> Invoice
                           </button>
 
-                          {/* Pre-Order Specific Actions */}
+                          {/* Pre-Order Specific Actions: Edit */}
+                          {isPo && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPoEdit(order)}
+                              className="px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Edit rincian PO, ganti SKU motif, tambah/kurang kuantiti, atau ubah harga"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Edit
+                            </button>
+                          )}
+
+                          {/* Pre-Order Specific Actions: Ship */}
                           {isPo && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
                             <button
                               type="button"
@@ -921,6 +965,16 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           isOpen={Boolean(selectedPoForShip)}
           onClose={() => setSelectedPoForShip(null)}
           preOrder={selectedPoForShip}
+        />
+      )}
+
+      {/* Pre-Order Edit Modal */}
+      {selectedPoForEdit && (
+        <EditPreOrderModal
+          isOpen={Boolean(selectedPoForEdit)}
+          onClose={() => setSelectedPoForEdit(null)}
+          preOrder={selectedPoForEdit}
+          products={products}
         />
       )}
 

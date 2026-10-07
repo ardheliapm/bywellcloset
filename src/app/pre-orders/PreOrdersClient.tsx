@@ -20,12 +20,14 @@ import {
   Check,
   Send,
   Boxes,
+  Edit3,
 } from 'lucide-react';
 import { PreOrderRecord, cancelPreOrder, deletePreOrder } from './actions';
 import { ProductItem } from '../products/actions';
 import CreatePreOrderModal from './CreatePreOrderModal';
 import PreOrderInvoiceModal from './PreOrderInvoiceModal';
 import ShipPreOrderModal from './ShipPreOrderModal';
+import EditPreOrderModal from './EditPreOrderModal';
 
 interface PreOrdersClientProps {
   initialPreOrders: PreOrderRecord[];
@@ -45,6 +47,7 @@ export default function PreOrdersClient({
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedPoForInvoice, setSelectedPoForInvoice] = useState<PreOrderRecord | null>(null);
   const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
+  const [selectedPoForEdit, setSelectedPoForEdit] = useState<PreOrderRecord | null>(null);
 
   // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -510,6 +513,18 @@ export default function PreOrdersClient({
                             <FileText className="w-3.5 h-3.5 text-indigo-600" /> Invoice
                           </button>
 
+                          {/* Edit PO Button (for PO not yet fully shipped / cancelled) */}
+                          {po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPoForEdit(po)}
+                              className="px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Edit rincian PO, ganti SKU motif, tambah/kurang kuantiti, atau ubah harga"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-amber-600" /> Edit
+                            </button>
+                          )}
+
                           {/* Kirim Barang Ready */}
                           {readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
                             <button
@@ -573,6 +588,13 @@ export default function PreOrdersClient({
         isOpen={Boolean(selectedPoForShip)}
         onClose={() => setSelectedPoForShip(null)}
         preOrder={selectedPoForShip}
+      />
+
+      <EditPreOrderModal
+        isOpen={Boolean(selectedPoForEdit)}
+        onClose={() => setSelectedPoForEdit(null)}
+        preOrder={selectedPoForEdit}
+        products={products}
       />
 
       {/* Confirmation Dialog */}

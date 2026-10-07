@@ -539,3 +539,242 @@ export async function reconcileAllWaitingPreOrders() {
   }
 }
 
+// 7. Update Full Pre-Order Details (Edit Customer, Quantities, Prices, Add/Remove Items, Sync Stock)
+export interface EditPreOrderItemInput {
+  id?: string;
+  productId?: string | null;
+  productSku: string;
+  productName: string;
+  price: number;
+  quantityOrdered: number;
+}
+
+export interface UpdatePreOrderPayload {
+  poId: string;
+  customerName: string;
+  customerPhone?: string | null;
+  notes?: string | null;
+  items: EditPreOrderItemInput[];
+}
+
+export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
+  try {
+    const { poId, customerName, customerPhone, notes, items } = payload;
+
+    if (!customerName || !customerName.trim()) {
+      return { success: false, error: 'Nama customer wajib diisi.' };
+    }
+
+    if (!items || items.length === 0) {
+      return { success: false, error: 'Pre-Order harus memiliki minimal 1 produk.' };
+    }
+
+    const po = await prisma.preOrder.findUnique({
+      where: { id: poId },
+      include: { items: true },
+    });
+
+    if (!po) {
+      return { success: false, error: 'Data Pre-Order tidak ditemukan.' };
+    }
+
+    if (po.status === 'SHIPPED') {
+      return {
+        success: false,
+        error: 'Pre-Order yang sudah dikirim semua (SHIPPED) tidak dapat diedit lagi.',
+      };
+    }
+
+    if (po.status === 'CANCELLED') {
+      return {
+        success: false,
+        error: 'Pre-Order yang sudah dibatalkan (CANCELLED) tidak dapat diedit.',
+      };
+    }
+
+    const cleanItems = items
+      .filter((it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0)
+      .map((it) => ({
+        id: it.id,
+        productId: it.productId || null,
+        productSku: (it.productSku || it.productName || 'PO-ITEM').trim().toUpperCase(),
+        productName: (it.productName || it.productSku || 'Produk PO').trim(),
+        price: Math.max(0, Math.floor(Number(it.price) || 0)),
+        quantityOrdered: Math.max(1, Math.floor(Number(it.quantityOrdered) || 1)),
+      }));
+
+    if (cleanItems.length === 0) {
+      return { success: false, error: 'Minimal harus ada 1 produk yang valid dalam PO.' };
+    }
+
+    await prisma.$transaction(
+      async (tx) => {
+        const allActiveProducts = await tx.product.findMany({
+          where: { isActive: true },
+        });
+
+        const keptItemIds = cleanItems.map((c) => c.id).filter(Boolean) as string[];
+
+        // 1. Release reserved stock for removed items
+        for (const oldIt of po.items) {
+          if (!keptItemIds.includes(oldIt.id)) {
+            const heldQty = oldIt.quantityFulfilled - oldIt.quantityShipped;
+            if (heldQty > 0 && oldIt.productId) {
+              await tx.product.update({
+                where: { id: oldIt.productId },
+                data: {
+                  reservedStock: { decrement: heldQty },
+                },
+              });
+            }
+          }
+        }
+
+        // Delete removed items
+        await tx.preOrderItem.deleteMany({
+          where: {
+            preOrderId: poId,
+            ...(keptItemIds.length > 0 ? { id: { notIn: keptItemIds } } : {}),
+          },
+        });
+
+        let totalAmount = 0;
+        let totalPcsOrdered = 0;
+        let totalPcsFulfilled = 0;
+        let totalPcsShipped = 0;
+
+        // 2. Upsert items & adjust stock
+        for (const it of cleanItems) {
+          const existingItem = it.id ? po.items.find((old) => old.id === it.id) : null;
+          const matchedProd = allActiveProducts.find((p) => isProductMatchItem(p, it));
+          const prodId = matchedProd ? matchedProd.id : it.productId || null;
+
+          let fulfilled = existingItem ? existingItem.quantityFulfilled : 0;
+          const shipped = existingItem ? existingItem.quantityShipped : 0;
+
+          // If ordered qty decreased below fulfilled qty, release excess held stock
+          if (it.quantityOrdered < fulfilled) {
+            const excess = fulfilled - it.quantityOrdered;
+            const canReduce = Math.min(excess, fulfilled - shipped);
+            if (canReduce > 0 && prodId) {
+              await tx.product.update({
+                where: { id: prodId },
+                data: {
+                  reservedStock: { decrement: canReduce },
+                },
+              });
+              if (matchedProd) matchedProd.reservedStock -= canReduce;
+            }
+            fulfilled = Math.max(shipped, it.quantityOrdered);
+          } else if (it.quantityOrdered > fulfilled && matchedProd) {
+            // If ordered qty increased, check if available stock can fulfill additional needed
+            const availableNow = Math.max(0, matchedProd.physicalStock - matchedProd.reservedStock);
+            if (availableNow > 0) {
+              const needed = it.quantityOrdered - fulfilled;
+              const alloc = Math.min(needed, availableNow);
+              if (alloc > 0) {
+                fulfilled += alloc;
+                await tx.product.update({
+                  where: { id: matchedProd.id },
+                  data: {
+                    reservedStock: { increment: alloc },
+                  },
+                });
+                matchedProd.reservedStock += alloc;
+              }
+            }
+          }
+
+          const subtotal = Math.floor(it.price * it.quantityOrdered);
+          totalAmount += subtotal;
+          totalPcsOrdered += it.quantityOrdered;
+          totalPcsFulfilled += fulfilled;
+          totalPcsShipped += shipped;
+
+          if (existingItem) {
+            await tx.preOrderItem.update({
+              where: { id: existingItem.id },
+              data: {
+                productId: prodId,
+                productSku: it.productSku,
+                productName: it.productName,
+                price: it.price,
+                quantityOrdered: it.quantityOrdered,
+                quantityFulfilled: fulfilled,
+                quantityShipped: shipped,
+                subtotal,
+              },
+            });
+          } else {
+            // New item added during edit
+            let initialFulfilled = 0;
+            if (matchedProd) {
+              const availableNow = Math.max(0, matchedProd.physicalStock - matchedProd.reservedStock);
+              if (availableNow > 0) {
+                initialFulfilled = Math.min(it.quantityOrdered, availableNow);
+                await tx.product.update({
+                  where: { id: matchedProd.id },
+                  data: {
+                    reservedStock: { increment: initialFulfilled },
+                  },
+                });
+                matchedProd.reservedStock += initialFulfilled;
+              }
+            }
+
+            totalPcsFulfilled += initialFulfilled;
+
+            await tx.preOrderItem.create({
+              data: {
+                preOrderId: poId,
+                productId: prodId,
+                productSku: it.productSku,
+                productName: it.productName,
+                price: it.price,
+                quantityOrdered: it.quantityOrdered,
+                quantityFulfilled: initialFulfilled,
+                quantityShipped: 0,
+                subtotal,
+              },
+            });
+          }
+        }
+
+        // 3. Determine new PO status
+        let nextStatus = 'WAITING_STOCK';
+        if (totalPcsShipped >= totalPcsOrdered && totalPcsOrdered > 0) {
+          nextStatus = 'SHIPPED';
+        } else if (totalPcsFulfilled >= totalPcsOrdered && totalPcsOrdered > 0) {
+          nextStatus = 'READY';
+        } else if (totalPcsFulfilled > 0 || totalPcsShipped > 0) {
+          nextStatus = totalPcsShipped > 0 ? 'PARTIAL_SHIPPED' : 'PARTIAL_READY';
+        }
+
+        await tx.preOrder.update({
+          where: { id: poId },
+          data: {
+            customerName: customerName.trim(),
+            customerPhone: customerPhone ? customerPhone.trim() : null,
+            notes: notes ? notes.trim() : null,
+            totalAmount,
+            status: nextStatus,
+          },
+        });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
+
+    revalidatePath('/pre-orders');
+    revalidatePath('/orders');
+    revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error updating pre-order:', error);
+    return { success: false, error: error.message || 'Gagal menyimpan perubahan Pre-Order' };
+  }
+}
+
+
