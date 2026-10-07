@@ -16,6 +16,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Truck,
+  Layers,
 } from 'lucide-react';
 import { ProductItem } from '../products/actions';
 import { createInboundShipment } from './inboundActions';
@@ -46,6 +47,7 @@ export default function CreateInboundModal({
   const [isPending, startTransition] = useTransition();
 
   const [activeTab, setActiveTab] = useState<'paste' | 'manual'>('paste');
+  const [invoiceCategory, setInvoiceCategory] = useState<string>('BABY TRYSPAN'); // 'BABY TRYSPAN' | 'PARIS JAPAN' | 'BELLA SQUARE' | 'MIX'
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [supplierName, setSupplierName] = useState('Konveksi Bandung');
   const [expectedDate, setExpectedDate] = useState('');
@@ -84,7 +86,7 @@ BW83(20)`
       setNotes('');
 
       // Auto-parse default text
-      parseTextToItems(rawText);
+      parseTextToItems(rawText, invoiceCategory);
     }
   }, [isOpen]);
 
@@ -92,31 +94,58 @@ BW83(20)`
 
   const totalExpectedPcs = items.reduce((acc, it) => acc + (Number(it.expectedQty) || 0), 0);
 
-  // Product Matching Helper
-  const findProductMatch = (query: string): ProductItem | null => {
+  // Product Matching Helper (Aware of selected invoice category)
+  const findProductMatch = (query: string, preferredCategory: string): ProductItem | null => {
     const q = query.toLowerCase().trim();
     if (!q) return null;
     const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
-    const exactSku = products.find(
+    // Filter products pool if specific category is selected
+    const candidatePool =
+      preferredCategory !== 'MIX'
+        ? products.filter((p) => {
+            const cat = preferredCategory.toLowerCase();
+            return (
+              p.name.toLowerCase().includes(cat) ||
+              (cat.includes('paris') && p.name.toLowerCase().includes('paris')) ||
+              (cat.includes('tryspan') && p.name.toLowerCase().includes('tryspan')) ||
+              (cat.includes('bella') && p.name.toLowerCase().includes('bella'))
+            );
+          })
+        : products;
+
+    const searchPool = candidatePool.length > 0 ? candidatePool : products;
+
+    // 1. Exact SKU match
+    const exactSku = searchPool.find(
       (p) =>
         p.sku.toLowerCase() === q ||
         (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
     );
     if (exactSku) return exactSku;
 
-    const exactMotif = products.find(
+    // 2. Exact Motif match
+    const exactMotif = searchPool.find(
       (p) => p.motif && p.motif.toLowerCase().trim() === q
     );
     if (exactMotif) return exactMotif;
 
-    const exactName = products.find((p) => p.name.toLowerCase().trim() === q);
+    // 3. Exact Full Name match
+    const exactName = searchPool.find((p) => p.name.toLowerCase().trim() === q);
     if (exactName) return exactName;
+
+    // 4. Combined Name & Motif
+    const exactCombined = searchPool.find((p) => {
+      const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
+      return full === q;
+    });
+    if (exactCombined) return exactCombined;
 
     return null;
   };
 
-  const parseTextToItems = (text: string) => {
+  // Super Flexible Parser for PDF tables, text, columns, WhatsApp
+  const parseTextToItems = (text: string, currentCategory: string = invoiceCategory) => {
     if (!text.trim()) return;
     const lines = text
       .split('\n')
@@ -133,21 +162,32 @@ BW83(20)`
     }
 
     // Check if line 1 looks like supplier name
-    if (lines[startIndex] && !/\(\d+\)|\s+[-xX:]\s*\d+|\s+\d+\s*(?:pcs|pc)?$/i.test(lines[startIndex])) {
-      setSupplierName(lines[startIndex].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim());
-      startIndex += 1;
+    if (lines[startIndex] && !/\(\d+\)|\s+[-xX:\t=]\s*\d+|\s+\d+\s*(?:pcs|pc)?$/i.test(lines[startIndex])) {
+      const sup = lines[startIndex].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
+      if (!/^\d+$/.test(sup)) {
+        setSupplierName(sup);
+        startIndex += 1;
+      }
     }
 
     const itemLines = lines.slice(startIndex);
     const parsed: InboundFormItem[] = [];
 
     itemLines.forEach((line, idx) => {
-      let itemName = line;
+      // Remove numbering at start like "1. ", "1) ", "• "
+      let cleanLine = line.replace(/^\d+[\.\)\-]\s*|^[\*\•\-\>\:\"]+|\s*[\*\"]+$/g, '').trim();
+      if (!cleanLine) return;
+
+      let itemName = cleanLine;
       let qty = 1;
 
-      const p1 = line.match(/^(.*?)\((\d+)\)\s*$/);
-      const p2 = line.match(/^(.*?)\s*[-xX:]\s*(\d+)\s*$/);
-      const p3 = line.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj)?$/i);
+      // Match various PDF table patterns:
+      // Pattern 1: name(qty) -> 152(50)
+      const p1 = cleanLine.match(/^(.*?)\((\d+)\)\s*$/);
+      // Pattern 2: name - qty or name : qty or name = qty or name tab qty -> 152 - 50, 152: 50, 152\t50
+      const p2 = cleanLine.match(/^(.*?)\s*[-:xX=\t]\s*(\d+)\s*(?:pcs|pc|buah|bj|lembar)?$/i);
+      // Pattern 3: name qty -> 152 50 or SPARK FLOWER 40 pcs
+      const p3 = cleanLine.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj|lembar)?$/i);
 
       if (p1) {
         itemName = p1[1].trim();
@@ -163,12 +203,14 @@ BW83(20)`
       itemName = itemName.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
       if (!itemName) return;
 
-      const prod = findProductMatch(itemName);
+      const prod = findProductMatch(itemName, currentCategory);
+      const categoryPrefix = currentCategory !== 'MIX' ? `${currentCategory} - ` : '';
+
       parsed.push({
         id: `inbound-item-${Date.now()}-${idx}`,
         productId: prod ? prod.id : null,
-        productSku: prod ? prod.sku : itemName.toUpperCase(),
-        productName: prod ? `${prod.name}${prod.motif ? ` - ${prod.motif}` : ''}` : itemName,
+        productSku: prod ? prod.sku : (currentCategory === 'PARIS JAPAN' && !itemName.toUpperCase().startsWith('PJ') ? `PJ-${itemName}` : itemName.toUpperCase()),
+        productName: prod ? `${prod.name}${prod.motif ? ` - ${prod.motif}` : ''}` : `${categoryPrefix}${itemName}`,
         expectedQty: qty,
       });
     });
@@ -336,7 +378,29 @@ BW83(20)`
           )}
 
           {/* Invoice Info Fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-indigo-600" /> Kategori / Jenis Kain
+              </label>
+              <select
+                value={invoiceCategory}
+                onChange={(e) => {
+                  const newCat = e.target.value;
+                  setInvoiceCategory(newCat);
+                  if (activeTab === 'paste') {
+                    parseTextToItems(rawText, newCat);
+                  }
+                }}
+                className="w-full px-3 py-1.5 bg-white rounded-lg border border-indigo-200 text-xs font-bold text-indigo-700 focus:ring-2 focus:ring-indigo-500/20"
+              >
+                <option value="BABY TRYSPAN">BABY TRYSPAN</option>
+                <option value="PARIS JAPAN">PARIS JAPAN / JEPANG</option>
+                <option value="BELLA SQUARE">BELLA SQUARE</option>
+                <option value="MIX">CAMPURAN (MIX)</option>
+              </select>
+            </div>
+
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 text-slate-400" /> No. Surat Jalan / Invoice <span className="text-rose-500">*</span>
