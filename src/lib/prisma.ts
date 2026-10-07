@@ -1,9 +1,15 @@
 import { PrismaClient } from '@prisma/client';
 
-const globalForPrisma = global as unknown as { prisma: PrismaClient };
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+};
 
 export const prisma =
-  globalForPrisma.prisma ||
-  new PrismaClient();
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: ['error'],
+  });
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+// Always cache client on globalThis in both development and serverless production
+// to prevent creating new connection instances on container reuse.
+globalForPrisma.prisma = prisma;
