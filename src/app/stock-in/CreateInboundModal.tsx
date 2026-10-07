@@ -17,7 +17,10 @@ import {
   CheckCircle2,
   Truck,
   Layers,
+  Camera,
+  ScanText,
 } from 'lucide-react';
+import Tesseract from 'tesseract.js';
 import { ProductItem } from '../products/actions';
 import { createInboundShipment } from './inboundActions';
 import SearchableProductSelect from '@/components/SearchableProductSelect';
@@ -56,6 +59,10 @@ export default function CreateInboundModal({
   const [attachmentType, setAttachmentType] = useState<string | null>(null); // 'IMAGE' | 'PDF'
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
 
+  // OCR scanning state
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+
   // Paste text state
   const [rawText, setRawText] = useState(
 `SJ-202610-001
@@ -90,14 +97,16 @@ BW83(20)`
       setAttachmentUrl(null);
       setAttachmentType(null);
       setAttachmentName(null);
+      setIsScanning(false);
+      setScanProgress(0);
 
       // Auto-parse default text
       parseTextToItems(rawText, invoiceCategory);
     }
   }, [isOpen]);
 
-  // Handle File Upload (Image or PDF)
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle File Upload with Auto-OCR scanning for images
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -106,9 +115,34 @@ BW83(20)`
     setAttachmentType(isPdf ? 'PDF' : 'IMAGE');
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const result = event.target?.result as string;
       setAttachmentUrl(result);
+
+      // If it's an image, run OCR auto-scan to detect text & pcs
+      if (!isPdf) {
+        setIsScanning(true);
+        setScanProgress(10);
+        try {
+          const { data } = await Tesseract.recognize(file, 'eng', {
+            logger: (m) => {
+              if (m.status === 'recognizing text' && m.progress) {
+                setScanProgress(Math.round(m.progress * 100));
+              }
+            },
+          });
+
+          if (data && data.text && data.text.trim()) {
+            setRawText(data.text);
+            parseTextToItems(data.text, invoiceCategory);
+            setSuccessMsg(`Berhasil memindai foto invoice! Teks dan kuantitas berhasil diekstrak.`);
+          }
+        } catch (ocrErr) {
+          console.error('OCR scanning error:', ocrErr);
+        } finally {
+          setIsScanning(false);
+        }
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -571,6 +605,26 @@ BW83(20)`
               </label>
               <span className="text-[11px] text-slate-400">JPG, PNG, atau PDF</span>
             </div>
+
+            {isScanning && (
+              <div className="p-3.5 bg-indigo-50 border border-indigo-200 rounded-xl space-y-2 animate-in fade-in">
+                <div className="flex items-center justify-between text-xs font-bold text-indigo-900">
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" /> Sedang membaca teks & pcs dari dokumen invoice...
+                  </span>
+                  <span className="font-mono text-indigo-700">{scanProgress}%</span>
+                </div>
+                <div className="w-full h-2 bg-indigo-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-600 transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.max(10, scanProgress)}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-indigo-700">
+                  Sistem mengekstrak kode motif & kuantitas secara otomatis ke dalam tabel.
+                </p>
+              </div>
+            )}
 
             {attachmentUrl ? (
               <div className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-2xs">
