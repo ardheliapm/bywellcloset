@@ -247,7 +247,7 @@ SPARK FLOWER(1)`
     );
     const master = findProductMasterType(nameToCheck, typesList);
 
-    let basePrice = 85000;
+    let basePrice = 25000;
     if (prod?.sellingPrice) {
       basePrice = prod.sellingPrice;
     } else if (master?.defaultPrice) {
@@ -255,7 +255,7 @@ SPARK FLOWER(1)`
     } else if (nameToCheck.toUpperCase().includes('BELLA')) {
       basePrice = 35000;
     } else if (nameToCheck.toUpperCase().includes('PARIS') || nameToCheck.toUpperCase().includes('JEPANG') || nameToCheck.toUpperCase().includes('JAPAN')) {
-      basePrice = 85000;
+      basePrice = 25000;
     }
 
     // Check if category has specific volume tiers (e.g. Paris Japan >= 50 pcs -> 24.000)

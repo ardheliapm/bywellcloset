@@ -56,9 +56,7 @@ export default function CreateInboundModal({
 
   // Paste text state
   const [rawText, setRawText] = useState(
-`SJ-202610-001
-Konveksi Bandung
-152(50)
+`152(50)
 123(30)
 SPARK FLOWER(40)
 BW83(20)`
@@ -74,9 +72,12 @@ BW83(20)`
     if (isOpen) {
       setActiveTab('paste');
       const now = new Date();
-      const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-      const randomSuffix = Math.floor(100 + Math.random() * 900);
-      setInvoiceNumber(`SJ-${dateStr}-${randomSuffix}`);
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const timeSuffix = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}-${Math.floor(10 + Math.random() * 90)}`;
+      const autoNumber = `SJ-${year}${month}${day}-${timeSuffix}`;
+      setInvoiceNumber(autoNumber);
 
       // Set default expected date to 2 days later
       const nextDate = new Date();
@@ -419,16 +420,17 @@ BW83(20)`
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-slate-400" /> No. Surat Jalan <span className="text-rose-500">*</span>
+              <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1.5"><FileText className="w-3.5 h-3.5 text-indigo-600" /> No. Surat Jalan</span>
+                <span className="text-[10px] bg-indigo-50 text-indigo-600 font-bold px-1.5 py-0.2 rounded">✨ Otomatis</span>
               </label>
               <input
                 type="text"
                 value={invoiceNumber}
                 onChange={(e) => setInvoiceNumber(e.target.value)}
-                placeholder="Contoh: SJ-202610-01"
+                placeholder="Otomatis dibuat sistem"
                 required
-                className="w-full px-3 py-1.5 bg-white rounded-lg border border-slate-200 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20"
+                className="w-full px-3 py-1.5 bg-slate-50 hover:bg-white focus:bg-white rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
 

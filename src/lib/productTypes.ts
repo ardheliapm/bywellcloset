@@ -42,8 +42,8 @@ export const DEFAULT_PRODUCT_TYPES: ProductMasterType[] = [
     id: 'type-paris-japan',
     name: 'PARIS JAPAN',
     isResellerEligible: false,
-    defaultPrice: 85000,
-    description: 'Harga Normal (Atau bisa diatur tier khusus)',
+    defaultPrice: 25000,
+    description: 'Harga Normal (Rp 25.000 / Grosir >= 50 pcs Rp 24.000)',
     tiers: [
       { id: 'pj-1', minQty: 50, maxQty: null, price: 24000, label: '>= 50 PCS' },
     ],
@@ -88,8 +88,8 @@ export function getStoredProductTypes(): ProductMasterType[] {
         else eligible = Boolean(p.isResellerEligible);
 
         let defaultPrice = Number(p.defaultPrice);
-        if (!defaultPrice || isNaN(defaultPrice)) {
-          if (isParis) defaultPrice = 85000;
+        if (!defaultPrice || isNaN(defaultPrice) || (isParis && defaultPrice === 85000)) {
+          if (isParis) defaultPrice = 25000;
           else if (isBella) defaultPrice = 35000;
           else defaultPrice = 42000;
         }

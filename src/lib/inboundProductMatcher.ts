@@ -108,10 +108,10 @@ export async function resolveOrCreateInboundProduct(
 
   const pricing =
     cat === 'PARIS JAPAN'
-      ? { sellingPrice: 85000, wholesalePrice: 24000 }
+      ? { costPrice: 20000, sellingPrice: 25000, wholesalePrice: 24000 }
       : cat === 'BELLA SQUARE'
-      ? { sellingPrice: 35000, wholesalePrice: 35000 }
-      : { sellingPrice: 42000, wholesalePrice: 39000 };
+      ? { costPrice: 20000, sellingPrice: 35000, wholesalePrice: 35000 }
+      : { costPrice: 25000, sellingPrice: 42000, wholesalePrice: 39000 };
 
   const created = await tx.product.create({
     data: {
@@ -119,7 +119,6 @@ export async function resolveOrCreateInboundProduct(
       name: cat,
       motif: null,
       color: null,
-      costPrice: 0,
       ...pricing,
       physicalStock: 0,
       reservedStock: 0,
