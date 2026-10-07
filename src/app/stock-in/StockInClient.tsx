@@ -504,7 +504,7 @@ export default function StockInClient({
                                 </button>
                               )}
 
-                              {/* Cancel */}
+                              {/* Cancel (Only if ON_DELIVERY) */}
                               {isOnDelivery && (
                                 <button
                                   type="button"
@@ -516,17 +516,15 @@ export default function StockInClient({
                                 </button>
                               )}
 
-                              {/* Delete */}
-                              {(isCancelled || isOnDelivery) && (
-                                <button
-                                  type="button"
-                                  onClick={() => setConfirmDialog({ isOpen: true, type: 'DELETE', shipment })}
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                                  title="Hapus Surat Jalan"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              {/* Delete Button (Available for all statuses) */}
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDialog({ isOpen: true, type: 'DELETE', shipment })}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                title="Hapus Surat Jalan"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -758,6 +756,11 @@ export default function StockInClient({
                 ) : (
                   <>
                     Hapus data Surat Jalan <strong>#{confirmDialog.shipment.invoiceNumber}</strong> secara permanen?
+                    {confirmDialog.shipment.status === 'RECEIVED' && (
+                      <span className="block text-xs text-rose-600 font-semibold mt-2 bg-rose-50 p-2.5 rounded-xl border border-rose-200 text-left">
+                        ⚠️ Surat Jalan ini sudah diverifikasi masuk stok ({confirmDialog.shipment.totalReceivedPcs} pcs). Menghapusnya akan membatalkan dan mengurangi kembali stok fisik produk yang bersangkutan.
+                      </span>
+                    )}
                   </>
                 )}
               </p>

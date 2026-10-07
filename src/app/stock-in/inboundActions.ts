@@ -1,4 +1,4 @@
-﻿'use server';
+'use server';
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
@@ -359,26 +359,75 @@ export async function cancelInboundShipment(shipmentId: string) {
   }
 }
 
-// 5. Delete Inbound Shipment (Permanently, only if CANCELLED or ON_DELIVERY)
+// 5. Delete Inbound Shipment (Permanently, with automatic stock rollback if RECEIVED)
 export async function deleteInboundShipment(shipmentId: string) {
   try {
     const shipment = await prisma.inboundShipment.findUnique({
       where: { id: shipmentId },
+      include: { items: true },
     });
 
     if (!shipment) {
       return { success: false, error: 'Data Surat Jalan tidak ditemukan.' };
     }
 
-    if (shipment.status === 'RECEIVED') {
-      return { success: false, error: 'Surat Jalan yang sudah masuk stok tidak dapat dihapus.' };
-    }
+    await prisma.$transaction(
+      async (tx) => {
+        // If shipment was already received, rollback physical stock
+        if (shipment.status === 'RECEIVED') {
+          for (const item of shipment.items) {
+            if (item.receivedQty > 0) {
+              // Find product by item.productId or by SKU
+              const prod = item.productId
+                ? await tx.product.findUnique({ where: { id: item.productId } })
+                : await tx.product.findFirst({
+                    where: {
+                      OR: [
+                        { sku: { equals: item.productSku, mode: 'insensitive' } },
+                        { sku: { equals: item.productSku.replace(/^(PJ|BT|BS)[-_ ]*/i, ''), mode: 'insensitive' } },
+                      ],
+                    },
+                  });
 
-    await prisma.inboundShipment.delete({
-      where: { id: shipmentId },
-    });
+              if (prod) {
+                const newPhysicalStock = Math.max(0, prod.physicalStock - item.receivedQty);
+                await tx.product.update({
+                  where: { id: prod.id },
+                  data: {
+                    physicalStock: newPhysicalStock,
+                  },
+                });
+              }
+            }
+          }
+
+          // Delete stock transactions associated with this SJ
+          await tx.stockTransaction.deleteMany({
+            where: {
+              notes: { contains: shipment.invoiceNumber },
+            },
+          });
+
+          // Delete finance expense associated with this SJ
+          await tx.financeTransaction.deleteMany({
+            where: {
+              referenceId: shipment.invoiceNumber,
+            },
+          });
+        }
+
+        // Delete the shipment and all its items (cascade)
+        await tx.inboundShipment.delete({
+          where: { id: shipmentId },
+        });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
 
     revalidatePath('/stock-in');
+    revalidatePath('/products');
+    revalidatePath('/finance');
+    revalidatePath('/');
     return { success: true };
   } catch (error: any) {
     console.error('Error deleting inbound shipment:', error);
