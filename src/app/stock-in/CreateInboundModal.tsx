@@ -17,11 +17,7 @@ import {
   CheckCircle2,
   Truck,
   Layers,
-  Camera,
-  ScanText,
-  Upload,
 } from 'lucide-react';
-import Tesseract from 'tesseract.js';
 import { ProductItem } from '../products/actions';
 import { createInboundShipment } from './inboundActions';
 import SearchableProductSelect from '@/components/SearchableProductSelect';
@@ -50,20 +46,13 @@ export default function CreateInboundModal({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
-  // Tab State: Default is 'scan' (Auto-Scan Foto/PDF)
-  const [activeTab, setActiveTab] = useState<'scan' | 'paste' | 'manual'>('scan');
+  // Tab State: 'paste' or 'manual'
+  const [activeTab, setActiveTab] = useState<'paste' | 'manual'>('paste');
   const [invoiceCategory, setInvoiceCategory] = useState<string>('BABY TRYSPAN'); // 'BABY TRYSPAN' | 'PARIS JAPAN' | 'BELLA SQUARE' | 'MIX'
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [supplierName, setSupplierName] = useState('Konveksi Bandung');
   const [expectedDate, setExpectedDate] = useState('');
   const [notes, setNotes] = useState('');
-  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
-  const [attachmentType, setAttachmentType] = useState<string | null>(null); // 'IMAGE' | 'PDF'
-  const [attachmentName, setAttachmentName] = useState<string | null>(null);
-
-  // OCR & PDF scanning state
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
 
   // Paste text state
   const [rawText, setRawText] = useState(
@@ -83,12 +72,13 @@ BW83(20)`
   // Auto generate invoice number suggestion
   useEffect(() => {
     if (isOpen) {
+      setActiveTab('paste');
       const now = new Date();
       const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
       const randomSuffix = Math.floor(100 + Math.random() * 900);
       setInvoiceNumber(`SJ-${dateStr}-${randomSuffix}`);
 
-      // Set default expected date to 2 days later (e.g. Wednesday to Friday)
+      // Set default expected date to 2 days later
       const nextDate = new Date();
       nextDate.setDate(nextDate.getDate() + 2);
       setExpectedDate(nextDate.toISOString().slice(0, 10));
@@ -96,11 +86,6 @@ BW83(20)`
       setError(null);
       setSuccessMsg(null);
       setNotes('');
-      setAttachmentUrl(null);
-      setAttachmentType(null);
-      setAttachmentName(null);
-      setIsScanning(false);
-      setScanProgress(0);
 
       // Auto-parse default text
       parseTextToItems(rawText, invoiceCategory);
@@ -161,7 +146,7 @@ BW83(20)`
     return null;
   };
 
-  // Super Flexible Parser for PDF tables, text, columns, WhatsApp
+  // Parser for Copas WhatsApp / Text / Surat Jalan
   const parseTextToItems = (text: string, currentCategory: string = invoiceCategory) => {
     if (!text || !text.trim()) return;
     const lines = text
@@ -201,7 +186,6 @@ BW83(20)`
       let itemName = cleanLine;
       let qty = 1;
 
-      // Match various PDF table patterns:
       // Pattern 1: name(qty) -> 152(50)
       const p1 = cleanLine.match(/^(.*?)\((\d+)\)\s*$/);
       // Pattern 2: name - qty or name : qty or name = qty or name tab qty -> 152 - 50, 152: 50, 152\t50
@@ -224,109 +208,32 @@ BW83(20)`
       if (!itemName || /^(total|jumlah|grand total|subtotal|page|halaman|tanggal|no|invoice)/i.test(itemName)) return;
 
       const prod = findProductMatch(itemName, currentCategory);
-      const categoryPrefix = currentCategory !== 'MIX' ? `${currentCategory} - ` : '';
+      const isParis = currentCategory === 'PARIS JAPAN' || itemName.toUpperCase().includes('PARIS');
+      const isBella = currentCategory === 'BELLA SQUARE' || itemName.toUpperCase().includes('BELLA');
+
+      let categoryName = currentCategory !== 'MIX' ? currentCategory : (isParis ? 'PARIS JAPAN' : (isBella ? 'BELLA SQUARE' : 'BABY TRYSPAN'));
+      let sku = prod ? prod.sku : (isParis ? (itemName.toUpperCase().startsWith('PJ-') ? itemName.toUpperCase() : `PJ-${itemName.toUpperCase()}`) : itemName.toUpperCase());
+
+      let displayName = '';
+      if (prod) {
+        const hasMotifInName = prod.motif && prod.name.toLowerCase().includes(prod.motif.toLowerCase());
+        const motifPart = prod.motif ? (hasMotifInName ? '' : ` - ${prod.motif}`) : (itemName && !prod.name.toLowerCase().includes(itemName.toLowerCase()) ? ` - ${itemName}` : '');
+        displayName = `${prod.name}${motifPart}`;
+      } else {
+        displayName = currentCategory !== 'MIX' ? `${currentCategory} - ${itemName}` : itemName;
+      }
 
       parsed.push({
         id: `inbound-item-${Date.now()}-${idx}`,
         productId: prod ? prod.id : null,
-        productSku: prod ? prod.sku : (currentCategory === 'PARIS JAPAN' && !itemName.toUpperCase().startsWith('PJ') ? `PJ-${itemName}` : itemName.toUpperCase()),
-        productName: prod ? `${prod.name}${prod.motif ? ` - ${prod.motif}` : ''}` : `${categoryPrefix}${itemName}`,
+        productSku: sku,
+        productName: displayName,
         expectedQty: qty,
       });
     });
 
     if (parsed.length > 0) {
       setItems(parsed);
-    }
-  };
-
-  // Helper to extract text from a PDF file using pdfjs-dist
-  const extractTextFromPdf = async (arrayBuffer: ArrayBuffer): Promise<string> => {
-    try {
-      const pdfjsLib = await import('pdfjs-dist/build/pdf');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      const pdf = await loadingTask.promise;
-      let fullText = '';
-
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items
-          .map((item: any) => item.str)
-          .join(' ');
-        fullText += pageText + '\n';
-      }
-
-      return fullText;
-    } catch (e) {
-      console.error('Error parsing PDF text:', e);
-      return '';
-    }
-  };
-
-  // Handle File Upload with Auto-OCR & PDF text extraction
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setAttachmentName(file.name);
-    const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
-    setAttachmentType(isPdf ? 'PDF' : 'IMAGE');
-
-    setIsScanning(true);
-    setScanProgress(15);
-    setError(null);
-    setSuccessMsg(null);
-
-    // 1. Read Base64 Data URL for storage/preview
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setAttachmentUrl(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-
-    try {
-      if (isPdf) {
-        // Read ArrayBuffer for PDF Text Extraction
-        setScanProgress(40);
-        const arrayBuffer = await file.arrayBuffer();
-        const extractedPdfText = await extractTextFromPdf(arrayBuffer);
-        setScanProgress(90);
-
-        if (extractedPdfText && extractedPdfText.trim().length > 10) {
-          setRawText(extractedPdfText);
-          parseTextToItems(extractedPdfText, invoiceCategory);
-          setSuccessMsg(`Berhasil membaca dokumen PDF "${file.name}"! Kuantitas & motif berhasil diekstrak.`);
-        } else {
-          setSuccessMsg(`Dokumen PDF tersimpan. Silakan periksa daftar barang di bawah atau gunakan tab Tempel Teks.`);
-        }
-      } else {
-        // Image OCR with Tesseract
-        setScanProgress(25);
-        const { data } = await Tesseract.recognize(file, 'eng', {
-          logger: (m) => {
-            if (m.status === 'recognizing text' && m.progress) {
-              setScanProgress(Math.round(m.progress * 100));
-            }
-          },
-        });
-
-        if (data && data.text && data.text.trim()) {
-          setRawText(data.text);
-          parseTextToItems(data.text, invoiceCategory);
-          setSuccessMsg(`Berhasil memindai foto invoice "${file.name}"! Teks & kuantitas berhasil diekstrak.`);
-        } else {
-          setSuccessMsg(`Foto invoice tersimpan sebagai lampiran.`);
-        }
-      }
-    } catch (err: any) {
-      console.error('File scan error:', err);
-      setError('Gagal membaca otomatis file. File tetap tersimpan sebagai lampiran dan Anda bisa mengisi di tabel.');
-    } finally {
-      setIsScanning(false);
-      setScanProgress(100);
     }
   };
 
@@ -389,10 +296,10 @@ BW83(20)`
     try {
       const res = await createInboundShipment({
         invoiceNumber: invoiceNumber.trim(),
-        supplierName: supplierName.trim() || 'Konveksi / Gudang',
+        supplierName: supplierName.trim() || 'Konveksi Bandung',
         expectedDate: expectedDate || null,
-        attachmentUrl,
-        attachmentType,
+        attachmentUrl: null,
+        attachmentType: null,
         notes: notes.trim() || null,
         items: validItems.map((it) => ({
           productId: it.productId,
@@ -434,7 +341,7 @@ BW83(20)`
             <div>
               <h2 className="text-base sm:text-lg font-bold">Catat Surat Jalan / Invoice Kiriman Gudang</h2>
               <p className="text-slate-400 text-xs">
-                Catat barang yang sedang dalam perjalanan dari konveksi (stok belum bertambah sampai barang fisik tiba)
+                Catat barang yang sedang dalam perjalanan dari konveksi (stok bertambah saat barang fisik diverifikasi tiba)
               </p>
             </div>
           </div>
@@ -451,17 +358,6 @@ BW83(20)`
         <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-3 gap-2 overflow-x-auto">
           <button
             type="button"
-            onClick={() => setActiveTab('scan')}
-            className={`px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
-              activeTab === 'scan'
-                ? 'bg-white text-indigo-600 border-slate-200 shadow-2xs'
-                : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
-            }`}
-          >
-            <Camera className="w-3.5 h-3.5" /> 📸 Auto-Scan Foto / PDF Vendor
-          </button>
-          <button
-            type="button"
             onClick={() => setActiveTab('paste')}
             className={`px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all border-t border-x flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
               activeTab === 'paste'
@@ -469,7 +365,7 @@ BW83(20)`
                 : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
             }`}
           >
-            <ClipboardPaste className="w-3.5 h-3.5" /> 📋 Tempel Teks Surat Jalan / WA
+            <ClipboardPaste className="w-3.5 h-3.5" /> 📋 Paste Chat / Copas Teks Kode
           </button>
           <button
             type="button"
@@ -480,7 +376,7 @@ BW83(20)`
                 : 'bg-transparent text-slate-500 border-transparent hover:text-slate-800'
             }`}
           >
-            <Plus className="w-3.5 h-3.5" /> ✍️ Input Manual
+            <Plus className="w-3.5 h-3.5" /> ✍️ Input Manual (Satu Per Satu)
           </button>
         </div>
 
@@ -504,7 +400,7 @@ BW83(20)`
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-indigo-600" /> Kategori / Jenis Kain
+                <Layers className="w-3.5 h-3.5 text-indigo-600" /> Kategori Kain
               </label>
               <select
                 value={invoiceCategory}
@@ -524,7 +420,7 @@ BW83(20)`
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-slate-400" /> No. Surat Jalan / Invoice <span className="text-rose-500">*</span>
+                <FileText className="w-3.5 h-3.5 text-slate-400" /> No. Surat Jalan <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
@@ -562,100 +458,16 @@ BW83(20)`
             </div>
           </div>
 
-          {/* TAB 1: AUTO-SCAN FOTO / PDF VENDOR (DEFAULT) */}
-          {activeTab === 'scan' && (
-            <div className="space-y-4">
-              <div className="p-5 bg-gradient-to-br from-indigo-50/70 to-blue-50/40 border-2 border-dashed border-indigo-200 rounded-2xl text-center space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white mx-auto flex items-center justify-center shadow-md shadow-indigo-500/25">
-                  <Camera className="w-6 h-6" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Upload Foto Surat Jalan dari WhatsApp atau PDF Vendor
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Sistem akan secara otomatis memindai gambar/PDF, membaca teks, dan mengekstrak jumlah pcs ke tabel di bawah
-                  </p>
-                </div>
-
-                {isScanning && (
-                  <div className="max-w-md mx-auto p-3.5 bg-white border border-indigo-200 rounded-xl space-y-2 shadow-xs animate-in fade-in">
-                    <div className="flex items-center justify-between text-xs font-bold text-indigo-900">
-                      <span className="flex items-center gap-1.5">
-                        <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" /> Sedang memindai teks & kuantitas...
-                      </span>
-                      <span className="font-mono text-indigo-700">{scanProgress}%</span>
-                    </div>
-                    <div className="w-full h-2 bg-indigo-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-indigo-600 transition-all duration-300 rounded-full"
-                        style={{ width: `${Math.max(15, scanProgress)}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {attachmentUrl && !isScanning && (
-                  <div className="max-w-md mx-auto p-3 bg-white border border-indigo-200 rounded-xl shadow-xs flex items-center justify-between">
-                    <div className="flex items-center gap-3 text-left">
-                      {attachmentType === 'IMAGE' ? (
-                        <img
-                          src={attachmentUrl}
-                          alt="Preview Invoice"
-                          className="w-12 h-12 rounded-lg object-cover border border-slate-200 shadow-2xs"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center font-bold text-xs">
-                          PDF
-                        </div>
-                      )}
-                      <div>
-                        <p className="font-bold text-xs text-slate-800 truncate max-w-[200px]">
-                          {attachmentName || 'Dokumen Terpindai'}
-                        </p>
-                        <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
-                          <CheckCircle2 className="w-3 h-3" /> Berhasil dipindai & terlampir
-                        </p>
-                      </div>
-                    </div>
-
-                    <label className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold cursor-pointer transition-colors border border-indigo-200">
-                      Ganti File
-                      <input
-                        type="file"
-                        accept="image/*,application/pdf"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                )}
-
-                {!attachmentUrl && !isScanning && (
-                  <label className="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors cursor-pointer">
-                    <Upload className="w-4 h-4" /> Pilih Foto / Dokumen PDF
-                    <input
-                      type="file"
-                      accept="image/*,application/pdf"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: PASTE TEXT */}
+          {/* TAB: PASTE TEXT */}
           {activeTab === 'paste' && (
             <div className="space-y-4">
               <div className="p-4 bg-slate-50 border border-indigo-100 rounded-xl space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Daftar Barang dari Surat Jalan / WA / Tabel:
+                    <ClipboardPaste className="w-4 h-4 text-indigo-600" /> Tempel Daftar Kode & Kuantitas Surat Jalan:
                   </label>
                   <span className="text-[11px] text-slate-400">
-                    Format: Kode Motif(Qty) atau SKU - Qty
+                    Format: Kode(Qty) atau Kode - Qty
                   </span>
                 </div>
 
@@ -665,20 +477,24 @@ BW83(20)`
                   onChange={(e) => {
                     setRawText(e.target.value);
                   }}
-                  placeholder="Contoh format:&#10;SJ-202610-001&#10;Konveksi Bandung&#10;152(50)&#10;123(30)&#10;SPARK FLOWER(40)"
+                  placeholder="Contoh format:&#10;SJ-202610-001&#10;Konveksi Bandung&#10;88(50)&#10;155(30)&#10;SPARK FLOWER(40)&#10;BW83(20)"
                   className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20"
                 />
 
                 <div className="flex justify-between items-center pt-1">
                   <span className="text-[11px] text-indigo-700 font-medium">
-                    ✨ Klik proses untuk memperbarui daftar barang di bawah
+                    ✨ Klik tombol di samping untuk memproses kode teks di atas
                   </span>
                   <button
                     type="button"
-                    onClick={() => parseTextToItems(rawText, invoiceCategory)}
+                    onClick={() => {
+                      parseTextToItems(rawText, invoiceCategory);
+                      setSuccessMsg('Daftar barang berhasil diproses!');
+                      setTimeout(() => setSuccessMsg(null), 2500);
+                    }}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
                   >
-                    <Sparkles className="w-3.5 h-3.5" /> Proses Daftar Barang
+                    <Sparkles className="w-3.5 h-3.5" /> Proses Daftar Kode
                   </button>
                 </div>
               </div>
@@ -689,7 +505,7 @@ BW83(20)`
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <Package className="w-3.5 h-3.5 text-indigo-600" /> Rincian Barang Hasil Pindaian ({items.length} SKU • {totalExpectedPcs} Pcs)
+                <Package className="w-3.5 h-3.5 text-indigo-600" /> Rincian Barang Kiriman ({items.length} SKU • {totalExpectedPcs} Pcs)
               </h4>
               <button
                 type="button"
@@ -700,7 +516,7 @@ BW83(20)`
               </button>
             </div>
 
-            <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 overflow-hidden max-h-[280px] overflow-y-auto">
               {items.map((it, idx) => (
                 <div key={it.id || idx} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition-colors">
                   <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -753,7 +569,7 @@ BW83(20)`
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Contoh: Kiriman berisi pesanan PO customer batch 1 + lebihan 20 pcs"
+              placeholder="Contoh: Kiriman berisi pesanan PO customer batch 1 + restok gudang"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500/20"
             />
           </div>
