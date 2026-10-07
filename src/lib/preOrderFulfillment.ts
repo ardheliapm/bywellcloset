@@ -20,7 +20,7 @@ export interface ItemReference {
 
 /**
  * Strict, accurate matching between a product and a PO item.
- * Prevents false positives between different motifs/SKUs.
+ * Handles prefix variations (e.g. "PJ-88" matches SKU "88" in Paris Japan).
  */
 export function isProductMatchItem(
   product: { id: string; sku: string; name: string; motif?: string | null },
@@ -47,15 +47,39 @@ export function isProductMatchItem(
   // 2. Clean alphanumeric SKU exact match (e.g. "BW-118" === "bw118" or "118w" === "118w")
   if (itCleanSku && pCleanSku && itCleanSku === pCleanSku) return true;
 
-  // 3. Exact Motif match (e.g. "SPARK FLOWER" === "SPARK FLOWER")
-  if (pMotif && (itSku === pMotif || itName === pMotif)) return true;
+  // 3. Category prefix stripped match (e.g. "PJ-88" or "PJ 88" matches "88", "BT-152" matches "152")
+  const pCode = pSku.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
+  const itCode = itSku.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
+  if (pCode && itCode && pCode === itCode) {
+    const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
+    const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
+    const isProductBella = pName.includes('bella') || pSku.startsWith('bs');
+    const isItemBella = itName.includes('bella') || itSku.startsWith('bs');
 
-  // 4. Exact combined name & motif (e.g. "BABY TRYSPAN - SPARK FLOWER")
+    if (isProductParis && isItemParis) return true;
+    if (isProductBella && isItemBella) return true;
+    if (!isProductParis && !isProductBella && !isItemParis && !isItemBella) return true;
+  }
+
+  // 4. Extract motif from item name (e.g. "PARIS JAPAN - 88" -> motif "88")
+  if (itName.includes('-')) {
+    const extractedMotif = itName.split('-').slice(1).join('-').trim().toLowerCase();
+    if (extractedMotif && (extractedMotif === pSku || extractedMotif === pCode || extractedMotif === pMotif)) {
+      const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
+      const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
+      if (isProductParis === isItemParis) return true;
+    }
+  }
+
+  // 5. Exact Motif match (e.g. "SPARK FLOWER" === "SPARK FLOWER")
+  if (pMotif && (itSku === pMotif || itName === pMotif || itCode === pMotif)) return true;
+
+  // 6. Exact combined name & motif (e.g. "BABY TRYSPAN - SPARK FLOWER")
   const pFullName = `${product.name} ${product.motif || ''}`.trim().toLowerCase();
   const pFullWithDash = `${product.name} - ${product.motif || ''}`.trim().toLowerCase();
   if (itName === pFullName || itName === pFullWithDash) return true;
 
-  // 5. If item SKU or Name is an exact match for product SKU + motif
+  // 7. If item SKU or Name is an exact match for product SKU + motif
   const pSkuMotif = `${product.sku} ${product.motif || ''}`.trim().toLowerCase();
   if (pSkuMotif && (itName === pSkuMotif || itSku === pSkuMotif)) return true;
 
