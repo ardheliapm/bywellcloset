@@ -15,6 +15,8 @@ export interface CreateInboundShipmentPayload {
   invoiceNumber: string;
   supplierName?: string;
   expectedDate?: string | null;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
   notes?: string | null;
   items: InboundItemInput[];
 }
@@ -61,6 +63,8 @@ export interface InboundShipmentRecord {
   freightCost: number;
   expectedDate: Date | null;
   receivedDate: Date | null;
+  attachmentUrl: string | null;
+  attachmentType: string | null;
   notes: string | null;
   auditNotes: string | null;
   createdAt: Date;
@@ -101,7 +105,7 @@ export async function getInboundShipments(): Promise<InboundShipmentRecord[]> {
 // 2. Create Inbound Shipment (Status: ON_DELIVERY)
 export async function createInboundShipment(payload: CreateInboundShipmentPayload) {
   try {
-    const { invoiceNumber, supplierName, expectedDate, notes, items } = payload;
+    const { invoiceNumber, supplierName, expectedDate, attachmentUrl, attachmentType, notes, items } = payload;
 
     if (!invoiceNumber || !invoiceNumber.trim()) {
       return { success: false, error: 'Nomor Surat Jalan / Invoice wajib diisi.' };
@@ -142,6 +146,8 @@ export async function createInboundShipment(payload: CreateInboundShipmentPayloa
         totalExpectedPcs,
         totalReceivedPcs: 0,
         expectedDate: expectedDate ? new Date(expectedDate) : null,
+        attachmentUrl: attachmentUrl || null,
+        attachmentType: attachmentType || null,
         notes: notes ? notes.trim() : null,
         items: {
           create: cleanItems.map((it) => ({

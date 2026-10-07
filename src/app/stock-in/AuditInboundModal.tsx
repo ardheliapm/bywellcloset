@@ -50,6 +50,7 @@ export default function AuditInboundModal({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showAttachment, setShowAttachment] = useState(false);
   const [successSummary, setSuccessSummary] = useState<{
     totalReceived: number;
     poAllocations: string[];
@@ -59,6 +60,7 @@ export default function AuditInboundModal({
     if (isOpen && shipment) {
       setError(null);
       setSuccessSummary(null);
+      setShowAttachment(false);
       setFreightCost(shipment.freightCost || 0);
       setAuditNotes(shipment.auditNotes || '');
 
@@ -181,6 +183,53 @@ export default function AuditInboundModal({
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* Attachment Preview Banner if exists */}
+          {shipment.attachmentUrl && (
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-2.5 text-xs text-indigo-950 font-bold">
+                <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>Ada Lampiran Dokumen / Foto Invoice Asli Vendor</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAttachment(!showAttachment)}
+                className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+              >
+                {showAttachment ? 'Tutup Lampiran' : '📷 Buka Foto/Dokumen Invoice'}
+              </button>
+            </div>
+          )}
+
+          {/* Attached Document Visual Viewer */}
+          {showAttachment && shipment.attachmentUrl && (
+            <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-center animate-in fade-in space-y-2">
+              <div className="flex items-center justify-between text-xs text-slate-400 pb-1 border-b border-slate-800">
+                <span>Dokumen / Foto Lampiran #{shipment.invoiceNumber}</span>
+                <button
+                  type="button"
+                  onClick={() => setShowAttachment(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {shipment.attachmentType === 'IMAGE' ? (
+                <img
+                  src={shipment.attachmentUrl}
+                  alt="Foto Invoice Vendor"
+                  className="max-h-80 mx-auto rounded-lg object-contain shadow-lg"
+                />
+              ) : (
+                <iframe
+                  src={shipment.attachmentUrl}
+                  title="PDF Preview"
+                  className="w-full h-80 rounded-lg bg-white"
+                />
+              )}
             </div>
           )}
 

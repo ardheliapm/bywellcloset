@@ -52,6 +52,9 @@ export default function CreateInboundModal({
   const [supplierName, setSupplierName] = useState('Konveksi Bandung');
   const [expectedDate, setExpectedDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [attachmentUrl, setAttachmentUrl] = useState<string | null>(null);
+  const [attachmentType, setAttachmentType] = useState<string | null>(null); // 'IMAGE' | 'PDF'
+  const [attachmentName, setAttachmentName] = useState<string | null>(null);
 
   // Paste text state
   const [rawText, setRawText] = useState(
@@ -84,11 +87,31 @@ BW83(20)`
       setError(null);
       setSuccessMsg(null);
       setNotes('');
+      setAttachmentUrl(null);
+      setAttachmentType(null);
+      setAttachmentName(null);
 
       // Auto-parse default text
       parseTextToItems(rawText, invoiceCategory);
     }
   }, [isOpen]);
+
+  // Handle File Upload (Image or PDF)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setAttachmentName(file.name);
+    const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
+    setAttachmentType(isPdf ? 'PDF' : 'IMAGE');
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      setAttachmentUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   if (!isOpen) return null;
 
@@ -281,6 +304,8 @@ BW83(20)`
         invoiceNumber: invoiceNumber.trim(),
         supplierName: supplierName.trim() || 'Konveksi / Gudang',
         expectedDate: expectedDate || null,
+        attachmentUrl,
+        attachmentType,
         notes: notes.trim() || null,
         items: validItems.map((it) => ({
           productId: it.productId,
@@ -536,6 +561,67 @@ BW83(20)`
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Upload Foto / Dokumen Invoice PDF */}
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-indigo-600" /> Upload Foto Surat Jalan / PDF Vendor (Opsional)
+              </label>
+              <span className="text-[11px] text-slate-400">JPG, PNG, atau PDF</span>
+            </div>
+
+            {attachmentUrl ? (
+              <div className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-2xs">
+                <div className="flex items-center gap-3">
+                  {attachmentType === 'IMAGE' ? (
+                    <img
+                      src={attachmentUrl}
+                      alt="Preview Invoice"
+                      className="w-12 h-12 rounded-lg object-cover border border-slate-200 shadow-2xs"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center font-bold text-xs">
+                      PDF
+                    </div>
+                  )}
+                  <div>
+                    <p className="font-bold text-xs text-slate-800 truncate max-w-xs">
+                      {attachmentName || 'Dokumen Invoice Terlampir'}
+                    </p>
+                    <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
+                      <CheckCircle2 className="w-3 h-3" /> Siap tersimpan untuk referensi saat audit fisik
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAttachmentUrl(null);
+                    setAttachmentType(null);
+                    setAttachmentName(null);
+                  }}
+                  className="px-2.5 py-1 text-xs text-rose-600 hover:bg-rose-50 rounded-lg transition-colors font-semibold"
+                >
+                  Hapus File
+                </button>
+              </div>
+            ) : (
+              <label className="flex flex-col items-center justify-center p-4 bg-white border-2 border-dashed border-slate-200 hover:border-indigo-400 rounded-xl cursor-pointer transition-colors group">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 group-hover:text-indigo-600">
+                  <FileText className="w-4 h-4 text-slate-400 group-hover:text-indigo-600" />
+                  <span>Klik untuk pilih file foto invoice dari WA atau PDF vendor</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            )}
           </div>
 
           {/* Notes */}
