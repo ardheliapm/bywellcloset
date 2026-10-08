@@ -35,124 +35,68 @@ export default async function DashboardPage() {
 
   let products: any[] = [];
   let allOrders: any[] = [];
-  let todayOrders: any[] = [];
   let preOrders: any[] = [];
-  let todayFinanceTransactions: any[] = [];
-  let monthFinanceTransactions: any[] = [];
-  let recentOrders: any[] = [];
-  let recentPreOrders: any[] = [];
+  let financeTransactions: any[] = [];
 
   try {
-    const results = await Promise.all([
-      // 1. Products
-      prisma.product.findMany({
-        where: { isActive: true },
-        select: {
-          id: true,
-          sku: true,
-          name: true,
-          motif: true,
-          physicalStock: true,
-          reservedStock: true,
-          sellingPrice: true,
-          costPrice: true,
-        },
-      }),
+    // 1. Master Produk
+    products = await prisma.product.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        sku: true,
+        name: true,
+        motif: true,
+        physicalStock: true,
+        reservedStock: true,
+        sellingPrice: true,
+        costPrice: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
-      // 2. All Orders
-      prisma.order.findMany({
-        select: {
-          id: true,
-          status: true,
-          totalAmount: true,
-          createdAt: true,
-        },
-      }),
+    // 2. Semua Order (termasuk items untuk rincian & recent)
+    allOrders = await prisma.order.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: true,
+      },
+    });
 
-      // 3. Today's Orders
-      prisma.order.findMany({
-        where: {
-          createdAt: {
-            gte: startOfToday,
-            lte: endOfToday,
-          },
-        },
-        select: {
-          id: true,
-          status: true,
-          totalAmount: true,
-        },
-      }),
+    // 3. Semua Pre-Order (termasuk items untuk rincian & recent)
+    preOrders = await prisma.preOrder.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: true,
+      },
+    });
 
-      // 4. Pre-Orders
-      prisma.preOrder.findMany({
-        select: {
-          id: true,
-          poNumber: true,
-          customerName: true,
-          status: true,
-          totalAmount: true,
-          createdAt: true,
-          items: {
-            select: {
-              quantityOrdered: true,
-              quantityFulfilled: true,
-              quantityShipped: true,
-            },
-          },
+    // 4. Transaksi Keuangan Bulan Ini
+    financeTransactions = await prisma.financeTransaction.findMany({
+      where: {
+        transactionDate: {
+          gte: startOfMonth,
+          lte: endOfMonth,
         },
-      }),
-
-      // 5. Today's Finance Transactions
-      prisma.financeTransaction.findMany({
-        where: {
-          transactionDate: {
-            gte: startOfToday,
-            lte: endOfToday,
-          },
-        },
-      }),
-
-      // 6. Month's Finance Transactions
-      prisma.financeTransaction.findMany({
-        where: {
-          transactionDate: {
-            gte: startOfMonth,
-            lte: endOfMonth,
-          },
-        },
-      }),
-
-      // 7. Recent 5 Orders
-      prisma.order.findMany({
-        take: 5,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          items: true,
-        },
-      }),
-
-      // 8. Recent 5 Pre-Orders
-      prisma.preOrder.findMany({
-        take: 5,
-        orderBy: { createdAt: 'desc' },
-        include: {
-          items: true,
-        },
-      }),
-    ]);
-
-    products = results[0] || [];
-    allOrders = results[1] || [];
-    todayOrders = results[2] || [];
-    preOrders = results[3] || [];
-    todayFinanceTransactions = results[4] || [];
-    monthFinanceTransactions = results[5] || [];
-    recentOrders = results[6] || [];
-    recentPreOrders = results[7] || [];
+      },
+      orderBy: { transactionDate: 'desc' },
+    });
   } catch (dbErr) {
     console.error('Error loading dashboard data:', dbErr);
   }
+
+  // Derive subsets in-memory to save database connection overhead
+  const todayOrders = allOrders.filter((o) => {
+    const d = new Date(o.createdAt);
+    return d >= startOfToday && d <= endOfToday;
+  });
+  const recentOrders = allOrders.slice(0, 5);
+  const recentPreOrders = preOrders.slice(0, 5);
+
+  const todayFinanceTransactions = financeTransactions.filter((t) => {
+    const d = new Date(t.transactionDate);
+    return d >= startOfToday && d <= endOfToday;
+  });
 
   // Aggregate Product Stats
   const totalSku = products.length;
