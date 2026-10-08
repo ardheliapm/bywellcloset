@@ -33,166 +33,190 @@ export default async function DashboardPage() {
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
   const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
-  // Fetch all dashboard stats in parallel
-  const [
-    products,
-    allOrders,
-    todayOrders,
-    preOrders,
-    todayFinanceTransactions,
-    monthFinanceTransactions,
-    recentOrders,
-    recentPreOrders,
-  ] = await Promise.all([
-    // 1. Products
-    prisma.product.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        sku: true,
-        name: true,
-        motif: true,
-        physicalStock: true,
-        reservedStock: true,
-        sellingPrice: true,
-        costPrice: true,
-      },
-    }),
+  let products: any[] = [];
+  let allOrders: any[] = [];
+  let todayOrders: any[] = [];
+  let preOrders: any[] = [];
+  let todayFinanceTransactions: any[] = [];
+  let monthFinanceTransactions: any[] = [];
+  let recentOrders: any[] = [];
+  let recentPreOrders: any[] = [];
 
-    // 2. All Orders
-    prisma.order.findMany({
-      select: {
-        id: true,
-        status: true,
-        totalAmount: true,
-        createdAt: true,
-      },
-    }),
-
-    // 3. Today's Orders
-    prisma.order.findMany({
-      where: {
-        createdAt: {
-          gte: startOfToday,
-          lte: endOfToday,
+  try {
+    const results = await Promise.all([
+      // 1. Products
+      prisma.product.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          motif: true,
+          physicalStock: true,
+          reservedStock: true,
+          sellingPrice: true,
+          costPrice: true,
         },
-      },
-      select: {
-        id: true,
-        status: true,
-        totalAmount: true,
-      },
-    }),
+      }),
 
-    // 4. Pre-Orders
-    prisma.preOrder.findMany({
-      select: {
-        id: true,
-        poNumber: true,
-        customerName: true,
-        status: true,
-        totalAmount: true,
-        createdAt: true,
-        items: {
-          select: {
-            quantityOrdered: true,
-            quantityFulfilled: true,
-            quantityShipped: true,
+      // 2. All Orders
+      prisma.order.findMany({
+        select: {
+          id: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+        },
+      }),
+
+      // 3. Today's Orders
+      prisma.order.findMany({
+        where: {
+          createdAt: {
+            gte: startOfToday,
+            lte: endOfToday,
           },
         },
-      },
-    }),
-
-    // 5. Today's Finance Transactions
-    prisma.financeTransaction.findMany({
-      where: {
-        transactionDate: {
-          gte: startOfToday,
-          lte: endOfToday,
+        select: {
+          id: true,
+          status: true,
+          totalAmount: true,
         },
-      },
-    }),
+      }),
 
-    // 6. Month's Finance Transactions
-    prisma.financeTransaction.findMany({
-      where: {
-        transactionDate: {
-          gte: startOfMonth,
-          lte: endOfMonth,
+      // 4. Pre-Orders
+      prisma.preOrder.findMany({
+        select: {
+          id: true,
+          poNumber: true,
+          customerName: true,
+          status: true,
+          totalAmount: true,
+          createdAt: true,
+          items: {
+            select: {
+              quantityOrdered: true,
+              quantityFulfilled: true,
+              quantityShipped: true,
+            },
+          },
         },
-      },
-    }),
+      }),
 
-    // 7. Recent 5 Orders
-    prisma.order.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        items: true,
-      },
-    }),
+      // 5. Today's Finance Transactions
+      prisma.financeTransaction.findMany({
+        where: {
+          transactionDate: {
+            gte: startOfToday,
+            lte: endOfToday,
+          },
+        },
+      }),
 
-    // 8. Recent 5 Pre-Orders
-    prisma.preOrder.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        items: true,
-      },
-    }),
-  ]);
+      // 6. Month's Finance Transactions
+      prisma.financeTransaction.findMany({
+        where: {
+          transactionDate: {
+            gte: startOfMonth,
+            lte: endOfMonth,
+          },
+        },
+      }),
+
+      // 7. Recent 5 Orders
+      prisma.order.findMany({
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          items: true,
+        },
+      }),
+
+      // 8. Recent 5 Pre-Orders
+      prisma.preOrder.findMany({
+        take: 5,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          items: true,
+        },
+      }),
+    ]);
+
+    products = results[0] || [];
+    allOrders = results[1] || [];
+    todayOrders = results[2] || [];
+    preOrders = results[3] || [];
+    todayFinanceTransactions = results[4] || [];
+    monthFinanceTransactions = results[5] || [];
+    recentOrders = results[6] || [];
+    recentPreOrders = results[7] || [];
+  } catch (dbErr) {
+    console.error('Error loading dashboard data:', dbErr);
+  }
 
   // Aggregate Product Stats
   const totalSku = products.length;
-  const totalPhysicalStock = products.reduce((acc, p) => acc + p.physicalStock, 0);
-  const totalReservedStock = products.reduce((acc, p) => acc + p.reservedStock, 0);
+  const totalPhysicalStock = products.reduce((acc, p) => acc + (Number(p.physicalStock) || 0), 0);
+  const totalReservedStock = products.reduce((acc, p) => acc + (Number(p.reservedStock) || 0), 0);
   const totalAvailableStock = Math.max(0, totalPhysicalStock - totalReservedStock);
 
   // Low stock products (available <= 3)
   const lowStockItems = products.filter(
-    (p) => p.physicalStock - p.reservedStock <= 3
+    (p) => (Number(p.physicalStock) || 0) - (Number(p.reservedStock) || 0) <= 3
   );
 
   // Aggregate Order Stats
   const holdOrders = allOrders.filter((o) => o.status === 'HOLD');
   const paidOrders = allOrders.filter((o) => o.status === 'PAID' || o.status === 'SHIPPED');
-  const totalOmsetAllTime = paidOrders.reduce((acc, o) => acc + o.totalAmount, 0);
+  const totalOmsetAllTime = paidOrders.reduce((acc, o) => acc + (Number(o.totalAmount) || 0), 0);
 
-  const holdOrdersTotalAmount = holdOrders.reduce((acc, o) => acc + o.totalAmount, 0);
+  const holdOrdersTotalAmount = holdOrders.reduce((acc, o) => acc + (Number(o.totalAmount) || 0), 0);
 
   // Today Order Stats
   const todayPaidOrders = todayOrders.filter((o) => o.status === 'PAID' || o.status === 'SHIPPED');
-  const todayOmset = todayPaidOrders.reduce((acc, o) => acc + o.totalAmount, 0);
+  const todayOmset = todayPaidOrders.reduce((acc, o) => acc + (Number(o.totalAmount) || 0), 0);
 
   // Aggregate Pre-Order Stats
   const activePOs = preOrders.filter((po) => po.status !== 'CANCELLED' && po.status !== 'SHIPPED');
   const waitingPOPcs = activePOs.reduce((acc, po) => {
     return (
       acc +
-      po.items.reduce((sub, it) => sub + Math.max(0, it.quantityOrdered - it.quantityFulfilled), 0)
+      (Array.isArray(po.items)
+        ? po.items.reduce(
+            (sub: number, it: any) =>
+              sub + Math.max(0, (Number(it.quantityOrdered) || 0) - (Number(it.quantityFulfilled) || 0)),
+            0
+          )
+        : 0)
     );
   }, 0);
   const readyToShipPOPcs = activePOs.reduce((acc, po) => {
     return (
       acc +
-      po.items.reduce((sub, it) => sub + Math.max(0, it.quantityFulfilled - it.quantityShipped), 0)
+      (Array.isArray(po.items)
+        ? po.items.reduce(
+            (sub: number, it: any) =>
+              sub + Math.max(0, (Number(it.quantityFulfilled) || 0) - (Number(it.quantityShipped) || 0)),
+            0
+          )
+        : 0)
     );
   }, 0);
 
   // Financial calculations for Today
   const todayIncome = todayFinanceTransactions
     .filter((t) => t.type === 'INCOME')
-    .reduce((acc, t) => acc + t.amount, 0);
+    .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
   const todayExpense = todayFinanceTransactions
     .filter((t) => t.type === 'EXPENSE')
-    .reduce((acc, t) => acc + t.amount, 0);
+    .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
 
   const formatRupiah = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
       maximumFractionDigits: 0,
-    }).format(val);
+    }).format(val || 0);
   };
 
   return (
@@ -341,8 +365,10 @@ export default async function DashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-slate-100 text-xs">
-                {recentOrders.map((ord) => {
-                  const totalPcs = ord.items.reduce((acc, it) => acc + it.quantity, 0);
+                {recentOrders.map((ord: any) => {
+                  const totalPcs = Array.isArray(ord.items)
+                    ? ord.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 0), 0)
+                    : 0;
                   const isHold = ord.status === 'HOLD';
                   const isPaid = ord.status === 'PAID';
                   const isShipped = ord.status === 'SHIPPED';
@@ -371,7 +397,7 @@ export default async function DashboardPage() {
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-500 truncate">
-                          {ord.items.map((it) => `${it.productSku} (${it.quantity}x)`).join(', ')}
+                          {Array.isArray(ord.items) ? ord.items.map((it: any) => `${it.productSku} (${it.quantity}x)`).join(', ') : '-'}
                         </div>
                       </div>
 
@@ -436,9 +462,13 @@ export default async function DashboardPage() {
               </div>
             ) : (
               <div className="divide-y divide-slate-100 text-xs">
-                {recentPreOrders.map((po) => {
-                  const totalPcs = po.items.reduce((acc, it) => acc + it.quantityOrdered, 0);
-                  const fulfilledPcs = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
+                {recentPreOrders.map((po: any) => {
+                  const totalPcs = Array.isArray(po.items)
+                    ? po.items.reduce((acc: number, it: any) => acc + (Number(it.quantityOrdered) || 0), 0)
+                    : 0;
+                  const fulfilledPcs = Array.isArray(po.items)
+                    ? po.items.reduce((acc: number, it: any) => acc + (Number(it.quantityFulfilled) || 0), 0)
+                    : 0;
 
                   return (
                     <div
@@ -455,7 +485,7 @@ export default async function DashboardPage() {
                           </span>
                         </div>
                         <div className="text-[11px] text-slate-500 truncate">
-                          {po.items.map((it) => `${it.productSku} (${it.quantityOrdered} pcs)`).join(', ')}
+                          {Array.isArray(po.items) ? po.items.map((it: any) => `${it.productSku} (${it.quantityOrdered} pcs)`).join(', ') : '-'}
                         </div>
                       </div>
 
