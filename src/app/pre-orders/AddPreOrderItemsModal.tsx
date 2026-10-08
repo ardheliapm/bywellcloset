@@ -375,11 +375,11 @@ export default function AddPreOrderItemsModal({
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase();
-    return products
+    return (products || [])
       .filter(
         (p) =>
-          p.sku.toLowerCase().includes(q) ||
-          p.name.toLowerCase().includes(q) ||
+          p.sku?.toLowerCase().includes(q) ||
+          p.name?.toLowerCase().includes(q) ||
           (p.motif && p.motif.toLowerCase().includes(q))
       )
       .slice(0, 8);
