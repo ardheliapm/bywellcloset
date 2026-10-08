@@ -63,6 +63,20 @@ export default function AddPreOrderItemsModal({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [productTypes, setProductTypes] = useState<ProductMasterType[]>([]);
 
+  // Filter products for catalog search (must be before any return statement according to React Rules of Hooks)
+  const filteredProducts = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return (products || [])
+      .filter(
+        (p) =>
+          p.sku?.toLowerCase().includes(q) ||
+          p.name?.toLowerCase().includes(q) ||
+          (p.motif && p.motif.toLowerCase().includes(q))
+      )
+      .slice(0, 8);
+  }, [products, searchQuery]);
+
   useEffect(() => {
     if (isOpen) {
       setProductTypes(getStoredProductTypes());
@@ -370,20 +384,6 @@ export default function AddPreOrderItemsModal({
     const filtered = items.filter((it) => it.id !== id);
     setItems(syncPricesWithTiers(filtered));
   };
-
-  // Filter products for catalog search
-  const filteredProducts = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    return (products || [])
-      .filter(
-        (p) =>
-          p.sku?.toLowerCase().includes(q) ||
-          p.name?.toLowerCase().includes(q) ||
-          (p.motif && p.motif.toLowerCase().includes(q))
-      )
-      .slice(0, 8);
-  }, [products, searchQuery]);
 
   const addedQty = items.reduce((acc, it) => acc + (Number(it.quantityOrdered) || 0), 0);
   const addedSubtotal = items.reduce(

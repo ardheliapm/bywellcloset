@@ -611,12 +611,14 @@ export default function PreOrdersClient({
         products={products}
       />
 
-      <AddPreOrderItemsModal
-        isOpen={Boolean(selectedPoForAddItems)}
-        onClose={() => setSelectedPoForAddItems(null)}
-        preOrder={selectedPoForAddItems}
-        products={products}
-      />
+      {selectedPoForAddItems && (
+        <AddPreOrderItemsModal
+          isOpen={Boolean(selectedPoForAddItems)}
+          onClose={() => setSelectedPoForAddItems(null)}
+          preOrder={selectedPoForAddItems}
+          products={products}
+        />
+      )}
 
       {/* Confirmation Dialog */}
       {confirmDialog.isOpen && confirmDialog.po && (
