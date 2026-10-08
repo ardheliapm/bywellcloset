@@ -78,30 +78,33 @@ export default function AddPreOrderItemsModal({
 
   if (!isOpen || !preOrder) return null;
 
-  const existingTotalQty = preOrder.items.reduce((acc, it) => acc + it.quantityOrdered, 0);
+  const existingTotalQty = preOrder?.items?.length
+    ? preOrder.items.reduce((acc, it) => acc + (Number(it.quantityOrdered) || 0), 0)
+    : 0;
 
   const formatRupiah = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
       maximumFractionDigits: 0,
-    }).format(val);
+    }).format(val || 0);
   };
 
   // Best product match in catalog
   const findBestProductMatch = (query: string, preferredCategory?: string): ProductItem | null => {
-    const q = query.toLowerCase().trim();
+    const q = (query || '').toLowerCase().trim();
     if (!q) return null;
     const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
     const candidateProducts = preferredCategory
       ? products.filter((p) => {
           const cat = preferredCategory.toLowerCase();
+          const pName = (p.name || '').toLowerCase();
           return (
-            p.name.toLowerCase().includes(cat) ||
-            (cat.includes('paris') && p.name.toLowerCase().includes('paris')) ||
-            (cat.includes('tryspan') && p.name.toLowerCase().includes('tryspan')) ||
-            (cat.includes('bella') && p.name.toLowerCase().includes('bella'))
+            pName.includes(cat) ||
+            (cat.includes('paris') && pName.includes('paris')) ||
+            (cat.includes('tryspan') && pName.includes('tryspan')) ||
+            (cat.includes('bella') && pName.includes('bella'))
           );
         })
       : products;
@@ -109,8 +112,8 @@ export default function AddPreOrderItemsModal({
     // 1. Exact SKU match
     const exactSku = candidateProducts.find(
       (p) =>
-        p.sku.toLowerCase() === q ||
-        (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
+        p.sku?.toLowerCase() === q ||
+        (cleanQ.length >= 2 && p.sku?.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
     );
     if (exactSku) return exactSku;
 
@@ -121,20 +124,20 @@ export default function AddPreOrderItemsModal({
     if (exactMotif) return exactMotif;
 
     // 3. Exact Name
-    const exactName = candidateProducts.find((p) => p.name.toLowerCase().trim() === q);
+    const exactName = candidateProducts.find((p) => (p.name || '').toLowerCase().trim() === q);
     if (exactName) return exactName;
 
     // 4. Combined
     const exactCombined = candidateProducts.find((p) => {
-      const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
-      const skuMotif = `${p.sku} ${p.motif || ''}`.toLowerCase().trim();
+      const full = `${p.name || ''} ${p.motif || ''}`.toLowerCase().trim();
+      const skuMotif = `${p.sku || ''} ${p.motif || ''}`.toLowerCase().trim();
       return full === q || skuMotif === q;
     });
     if (exactCombined) return exactCombined;
 
     // 5. Fallback across all products
     if (preferredCategory) {
-      const fallbackExact = products.find((p) => p.sku.toLowerCase() === q);
+      const fallbackExact = products.find((p) => p.sku?.toLowerCase() === q);
       if (fallbackExact) return fallbackExact;
     }
 
@@ -143,44 +146,53 @@ export default function AddPreOrderItemsModal({
 
   // Re-calculate prices according to master reseller tiers
   const syncPricesWithTiers = (itemList: NewItemRow[]): NewItemRow[] => {
-    const typesList = productTypes.length > 0 ? productTypes : getStoredProductTypes();
+    try {
+      const typesList = productTypes.length > 0 ? productTypes : getStoredProductTypes();
 
-    // Sum existing PO items by category group
-    const groupQtyMap = new Map<string, number>();
+      // Sum existing PO items by category group
+      const groupQtyMap = new Map<string, number>();
 
-    preOrder.items.forEach((ex) => {
-      const master = findProductMasterType(ex.productName, typesList);
-      const groupKey = master ? master.name.toUpperCase() : ex.productName.toUpperCase();
-      groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + ex.quantityOrdered);
-    });
-
-    itemList.forEach((it) => {
-      const master = findProductMasterType(it.productName, typesList);
-      const groupKey = master ? master.name.toUpperCase() : it.categoryName.toUpperCase();
-      groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + it.quantityOrdered);
-    });
-
-    return itemList.map((it) => {
-      if (it.isCustomPrice) return it;
-
-      const master = findProductMasterType(it.productName, typesList);
-      const groupKey = master ? master.name.toUpperCase() : it.categoryName.toUpperCase();
-      const totalGroupQty = groupQtyMap.get(groupKey) || it.quantityOrdered;
-
-      let defaultSellingPrice = 42000;
-      if (master && master.defaultPrice) {
-        defaultSellingPrice = master.defaultPrice;
-      } else if (it.categoryName.includes('PARIS')) {
-        defaultSellingPrice = 25000;
+      if (Array.isArray(preOrder?.items)) {
+        preOrder.items.forEach((ex) => {
+          const master = findProductMasterType(ex.productName, typesList);
+          const groupKey = master ? master.name.toUpperCase() : (ex.productName || '').toUpperCase();
+          groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + (Number(ex.quantityOrdered) || 0));
+        });
       }
 
-      const calc = calculateProductPrice(it.productName, totalGroupQty, defaultSellingPrice, typesList);
+      if (Array.isArray(itemList)) {
+        itemList.forEach((it) => {
+          const master = findProductMasterType(it.productName, typesList);
+          const groupKey = master ? master.name.toUpperCase() : (it.categoryName || '').toUpperCase();
+          groupQtyMap.set(groupKey, (groupQtyMap.get(groupKey) || 0) + (Number(it.quantityOrdered) || 0));
+        });
+      }
 
-      return {
-        ...it,
-        price: calc.price,
-      };
-    });
+      return itemList.map((it) => {
+        if (it.isCustomPrice) return it;
+
+        const master = findProductMasterType(it.productName, typesList);
+        const groupKey = master ? master.name.toUpperCase() : (it.categoryName || '').toUpperCase();
+        const totalGroupQty = groupQtyMap.get(groupKey) || (Number(it.quantityOrdered) || 1);
+
+        let defaultSellingPrice = 42000;
+        if (master && master.defaultPrice) {
+          defaultSellingPrice = master.defaultPrice;
+        } else if ((it.categoryName || '').includes('PARIS')) {
+          defaultSellingPrice = 25000;
+        }
+
+        const calc = calculateProductPrice(it.productName || '', totalGroupQty, defaultSellingPrice, typesList);
+
+        return {
+          ...it,
+          price: calc?.price ?? defaultSellingPrice,
+        };
+      });
+    } catch (err) {
+      console.error('Error in syncPricesWithTiers:', err);
+      return itemList;
+    }
   };
 
   // Parse pasted WhatsApp text
@@ -430,7 +442,7 @@ export default function AddPreOrderItemsModal({
               Tambah Item ke Pre-Order #{preOrder.poNumber}
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Customer: <strong className="text-slate-800">{preOrder.customerName}</strong> • Item saat ini: {preOrder.items.length} ({existingTotalQty} pcs)
+              Customer: <strong className="text-slate-800">{preOrder?.customerName}</strong> • Item saat ini: {preOrder?.items?.length || 0} ({existingTotalQty} pcs)
             </p>
           </div>
           <button
