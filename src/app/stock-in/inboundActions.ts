@@ -1,8 +1,14 @@
 'use server';
 
+export const maxDuration = 120;
+
 import { prisma } from '@/lib/prisma';
+import type { Prisma, Product } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
-import { allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
+import {
+  allocateStockToWaitingPreOrders,
+  allocateStockToWaitingPreOrdersBatch,
+} from '@/lib/preOrderFulfillment';
 import { resolveOrCreateInboundProduct } from '@/lib/inboundProductMatcher';
 
 export interface InboundItemInput {
@@ -200,6 +206,14 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
 
     await prisma.$transaction(
       async (tx) => {
+        interface ProcessedInboundItem {
+          itemRecord: (typeof shipment.items)[0];
+          matchedProd: Product;
+          receivedQty: number;
+        }
+
+        const processedItems: ProcessedInboundItem[] = [];
+
         for (const itemAudit of items) {
           const itemRecord = shipment.items.find((i) => i.id === itemAudit.itemId);
           if (!itemRecord) continue;
@@ -207,16 +221,6 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
           const receivedQty = Math.max(0, Math.floor(Number(itemAudit.receivedQty) || 0));
           totalActualReceivedPcs += receivedQty;
 
-          // 1. Update InboundShipmentItem record
-          await tx.inboundShipmentItem.update({
-            where: { id: itemRecord.id },
-            data: {
-              receivedQty,
-              notes: itemAudit.notes ? itemAudit.notes.trim() : null,
-            },
-          });
-
-          // 2. If receivedQty > 0, find or update product physicalStock in Master Data
           if (receivedQty > 0) {
             const rawSku = (itemRecord.productSku || '').trim();
             const rawName = (itemRecord.productName || '').trim();
@@ -230,61 +234,101 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
               matchedProd = resolved.product;
             }
 
-            // Always link the inbound item to the Master Data product
-            if (itemRecord.productId !== matchedProd.id) {
-              await tx.inboundShipmentItem.update({
-                where: { id: itemRecord.id },
-                data: { productId: matchedProd.id },
-              });
-            }
-
-
-            // Increment physical stock
-            const updatedProd = await tx.product.update({
-              where: { id: matchedProd.id },
+            // 1. Update InboundShipmentItem record once with linked productId and receivedQty
+            await tx.inboundShipmentItem.update({
+              where: { id: itemRecord.id },
               data: {
-                physicalStock: { increment: receivedQty },
+                receivedQty,
+                productId: matchedProd.id,
+                notes: itemAudit.notes ? itemAudit.notes.trim() : null,
               },
             });
 
-            // 3. Auto Allocate to Waiting Pre-Orders (FIFO)
-            const allocResult = await allocateStockToWaitingPreOrders(
-              tx,
-              updatedProd,
-              receivedQty
-            );
-
-            if (allocResult.allocatedCount > 0) {
-              poFulfillmentNotes.push(
-                `+${allocResult.allocatedCount} pcs untuk PO #${allocResult.poNumbers.join(', #')}`
-              );
-            }
-
-            // 4. Log Stock Transaction
-            const selisih = receivedQty - itemRecord.expectedQty;
-            const diffText =
-              selisih > 0
-                ? ` (Lebihan +${selisih} pcs)`
-                : selisih < 0
-                ? ` (Kurang ${selisih} pcs)`
-                : ' (Sesuai Surat Jalan)';
-
-            await tx.stockTransaction.create({
+            processedItems.push({
+              itemRecord,
+              matchedProd,
+              receivedQty,
+            });
+          } else {
+            // receivedQty is 0
+            await tx.inboundShipmentItem.update({
+              where: { id: itemRecord.id },
               data: {
-                productId: matchedProd.id,
-                type: 'STOCK_IN',
-                quantity: receivedQty,
-                notes: `Kedatangan SJ #${shipment.invoiceNumber} (${matchedProd.sku})${diffText}${
-                  allocResult.allocatedCount > 0
-                    ? ` [Alokasi PO: +${allocResult.allocatedCount} pcs]`
-                    : ''
-                }`,
+                receivedQty: 0,
+                notes: itemAudit.notes ? itemAudit.notes.trim() : null,
               },
             });
           }
         }
 
-        // 5. Update InboundShipment status
+        // 2. Aggregate received items by product for high-performance batch allocation
+        const productBatchMap = new Map<string, { product: Product; totalReceivedQty: number }>();
+        for (const pItem of processedItems) {
+          const existing = productBatchMap.get(pItem.matchedProd.id);
+          if (existing) {
+            existing.totalReceivedQty += pItem.receivedQty;
+          } else {
+            productBatchMap.set(pItem.matchedProd.id, {
+              product: pItem.matchedProd,
+              totalReceivedQty: pItem.receivedQty,
+            });
+          }
+        }
+
+        // 3. High-performance batch allocation to waiting pre-orders (FIFO)
+        const itemsToAllocate = Array.from(productBatchMap.values()).map((e) => ({
+          product: e.product,
+          availableQty: e.totalReceivedQty,
+        }));
+
+        const batchAllocResult = await allocateStockToWaitingPreOrdersBatch(tx, itemsToAllocate);
+        poFulfillmentNotes.push(...batchAllocResult.poFulfillmentNotes);
+
+        // 4. Update product stock (physicalStock + reservedStock) in ONE atomic query per unique product
+        for (const [prodId, data] of productBatchMap.entries()) {
+          const allocInfo = batchAllocResult.allocationsByProductId.get(prodId);
+          const allocatedCount = allocInfo?.allocatedCount || 0;
+
+          await tx.product.update({
+            where: { id: prodId },
+            data: {
+              physicalStock: { increment: data.totalReceivedQty },
+              reservedStock: { increment: allocatedCount },
+            },
+          });
+        }
+
+        // 5. Bulk insert stock transactions in ONE single query
+        const stockTransactionsToCreate: Prisma.StockTransactionCreateManyInput[] = [];
+        for (const pItem of processedItems) {
+          const allocInfo = batchAllocResult.allocationsByProductId.get(pItem.matchedProd.id);
+          const allocatedCount = allocInfo?.allocatedCount || 0;
+
+          const selisih = pItem.receivedQty - pItem.itemRecord.expectedQty;
+          const diffText =
+            selisih > 0
+              ? ` (Lebihan +${selisih} pcs)`
+              : selisih < 0
+              ? ` (Kurang ${selisih} pcs)`
+              : ' (Sesuai Surat Jalan)';
+
+          stockTransactionsToCreate.push({
+            productId: pItem.matchedProd.id,
+            type: 'STOCK_IN',
+            quantity: pItem.receivedQty,
+            notes: `Kedatangan SJ #${shipment.invoiceNumber} (${pItem.matchedProd.sku})${diffText}${
+              allocatedCount > 0 ? ` [Alokasi PO: +${allocatedCount} pcs]` : ''
+            }`,
+          });
+        }
+
+        if (stockTransactionsToCreate.length > 0) {
+          await tx.stockTransaction.createMany({
+            data: stockTransactionsToCreate,
+          });
+        }
+
+        // 6. Update InboundShipment status
         await tx.inboundShipment.update({
           where: { id: shipmentId },
           data: {
@@ -296,7 +340,7 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
           },
         });
 
-        // 6. Record Freight Expense to Finance if freightCost > 0
+        // 7. Record Freight Expense to Finance if freightCost > 0
         if (freightCost > 0) {
           await tx.financeTransaction.create({
             data: {
@@ -309,7 +353,7 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
           });
         }
       },
-      { maxWait: 15000, timeout: 30000 }
+      { maxWait: 30000, timeout: 120000 }
     );
 
     revalidatePath('/stock-in');
@@ -421,7 +465,7 @@ export async function deleteInboundShipment(shipmentId: string) {
           where: { id: shipmentId },
         });
       },
-      { maxWait: 15000, timeout: 30000 }
+      { maxWait: 30000, timeout: 120000 }
     );
 
     revalidatePath('/stock-in');
