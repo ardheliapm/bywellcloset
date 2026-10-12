@@ -130,6 +130,85 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
       };
     });
 
+    // 3b. Calculate Pre-Order COGS from PO Shipments in this period
+    const poStockOuts = await prisma.stockTransaction.findMany({
+      where: {
+        type: 'ADJUSTMENT_OUT',
+        notes: { contains: 'Pengiriman PO #' },
+        transactionDate: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        product: {
+          select: { id: true, name: true, sku: true, costPrice: true },
+        },
+      },
+      orderBy: { transactionDate: 'desc' },
+    });
+
+    const poShipmentsMap = new Map<
+      string,
+      {
+        poNumber: string;
+        customerName: string;
+        date: Date;
+        totalQty: number;
+        totalCOGS: number;
+        itemsList: string[];
+      }
+    >();
+
+    poStockOuts.forEach((st) => {
+      const itemHpp =
+        st.product?.costPrice && st.product.costPrice > 0 ? st.product.costPrice : 20000;
+      const cogs = itemHpp * st.quantity;
+      totalCOGS += cogs;
+
+      const match = (st.notes || '').match(/Pengiriman PO #([^\s(]+)(?:\s*\(([^)]+)\))?/);
+      const poNum = match ? match[1] : st.notes || 'PO-SHIPMENT';
+      const custName = match && match[2] ? `${match[2]} (PO)` : 'Pre-Order Customer';
+
+      const existing = poShipmentsMap.get(poNum);
+      const itemDesc = `${st.product?.name || st.product?.sku || 'Produk'} (${st.quantity} pcs)`;
+
+      if (existing) {
+        existing.totalQty += st.quantity;
+        existing.totalCOGS += cogs;
+        existing.itemsList.push(itemDesc);
+      } else {
+        poShipmentsMap.set(poNum, {
+          poNumber: poNum,
+          customerName: custName,
+          date: st.transactionDate,
+          totalQty: st.quantity,
+          totalCOGS: cogs,
+          itemsList: [itemDesc],
+        });
+      }
+    });
+
+    for (const [poNum, poData] of poShipmentsMap.entries()) {
+      const financeTx = transactions.find(
+        (t) => t.type === 'INCOME' && (t.referenceId === poNum || t.description.includes(poNum))
+      );
+      const amount = financeTx ? financeTx.amount : 0;
+
+      paidOrdersSummary.push({
+        id: `po-${poNum}`,
+        orderNumber: poNum,
+        customerName: poData.customerName,
+        customerPhone: null,
+        paidAt: poData.date,
+        totalAmount: amount,
+        totalQty: poData.totalQty,
+        totalCOGS: poData.totalCOGS,
+        grossProfit: amount - poData.totalCOGS,
+        itemsSummary: poData.itemsList.join(', '),
+      });
+    }
+
     const grossProfit = totalIncome - totalCOGS;
     const netProfit = grossProfit - totalExpenses;
 
@@ -138,7 +217,7 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
     const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
-    const [todayTxs, todayPaidOrders] = await Promise.all([
+    const [todayTxs, todayPaidOrders, todayPoStockOuts] = await Promise.all([
       prisma.financeTransaction.findMany({
         where: { transactionDate: { gte: todayStart, lte: todayEnd } },
       }),
@@ -148,6 +227,16 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
           paidAt: { gte: todayStart, lte: todayEnd },
         },
         include: { items: true },
+      }),
+      prisma.stockTransaction.findMany({
+        where: {
+          type: 'ADJUSTMENT_OUT',
+          notes: { contains: 'Pengiriman PO #' },
+          transactionDate: { gte: todayStart, lte: todayEnd },
+        },
+        include: {
+          product: { select: { costPrice: true } },
+        },
       }),
     ]);
 
@@ -164,6 +253,12 @@ export async function getFinanceSummary(month?: number, year?: number): Promise<
         const itemHpp = it.costPrice > 0 ? it.costPrice : 20000;
         todayCOGS += itemHpp * it.quantity;
       });
+    });
+
+    todayPoStockOuts.forEach((st) => {
+      const itemHpp =
+        st.product?.costPrice && st.product.costPrice > 0 ? st.product.costPrice : 20000;
+      todayCOGS += itemHpp * st.quantity;
     });
 
     const todayGrossProfit = todayIncome - todayCOGS;

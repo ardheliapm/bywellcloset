@@ -264,6 +264,7 @@ export async function updateProduct(
     costPrice?: number;
     sellingPrice?: number;
     wholesalePrice?: number;
+    physicalStock?: number;
   }
 ) {
   try {
@@ -293,6 +294,29 @@ export async function updateProduct(
       dataToUpdate.sellingPrice = Math.max(0, Math.floor(Number(formData.sellingPrice) || 0));
     if (formData.wholesalePrice !== undefined)
       dataToUpdate.wholesalePrice = Math.max(0, Math.floor(Number(formData.wholesalePrice) || 0));
+
+    if (formData.physicalStock !== undefined) {
+      const newPhysical = Math.max(0, Math.floor(Number(formData.physicalStock) || 0));
+      if (newPhysical < existing.reservedStock) {
+        return {
+          success: false,
+          error: `Stok fisik (${newPhysical} pcs) tidak boleh lebih kecil dari reserved stock (${existing.reservedStock} pcs) yang sedang di-hold di pesanan aktif.`,
+        };
+      }
+      dataToUpdate.physicalStock = newPhysical;
+
+      const diff = newPhysical - existing.physicalStock;
+      if (diff !== 0) {
+        await prisma.stockTransaction.create({
+          data: {
+            productId: id,
+            type: diff > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
+            quantity: Math.abs(diff),
+            notes: `Koreksi stok fisik manual: ${existing.physicalStock} -> ${newPhysical} (${diff > 0 ? `+${diff}` : diff} pcs)`,
+          },
+        });
+      }
+    }
 
     const updatedProduct = await prisma.product.update({
       where: { id },

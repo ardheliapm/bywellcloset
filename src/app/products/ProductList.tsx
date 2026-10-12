@@ -49,6 +49,7 @@ export default function ProductList({ products }: ProductListProps) {
   const [editColor, setEditColor] = useState('');
   const [editCostPrice, setEditCostPrice] = useState<number>(0);
   const [editSellingPrice, setEditSellingPrice] = useState<number>(0);
+  const [editPhysicalStock, setEditPhysicalStock] = useState<number>(0);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -60,6 +61,7 @@ export default function ProductList({ products }: ProductListProps) {
     setEditColor(product.color || '');
     setEditCostPrice(product.costPrice || 0);
     setEditSellingPrice(product.sellingPrice || 0);
+    setEditPhysicalStock(product.physicalStock || 0);
     setEditError(null);
   };
 
@@ -97,6 +99,8 @@ export default function ProductList({ products }: ProductListProps) {
               costPrice: editCostPrice,
               sellingPrice: editSellingPrice,
               wholesalePrice: editSellingPrice,
+              physicalStock: editPhysicalStock,
+              availableStock: Math.max(0, editPhysicalStock - p.reservedStock),
             }
           : p
       )
@@ -110,6 +114,7 @@ export default function ProductList({ products }: ProductListProps) {
       costPrice: editCostPrice,
       sellingPrice: editSellingPrice,
       wholesalePrice: editSellingPrice,
+      physicalStock: editPhysicalStock,
     });
 
     setIsSavingEdit(false);
@@ -662,8 +667,23 @@ export default function ProductList({ products }: ProductListProps) {
                       </td>
 
                       {/* Physical Stock */}
-                      <td className="py-3.5 px-4 text-center font-semibold text-slate-800">
-                        {product.physicalStock}
+                      <td className="py-3.5 px-4 text-center">
+                        {isEditing ? (
+                          <div className="w-20 mx-auto">
+                            <input
+                              type="number"
+                              min={product.reservedStock}
+                              value={editPhysicalStock}
+                              onChange={(e) => setEditPhysicalStock(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                              className="w-full text-center py-1 bg-white border border-indigo-300 rounded-lg text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 shadow-2xs"
+                              title={`Minimal ${product.reservedStock} pcs (karena sedang di-hold)`}
+                            />
+                          </div>
+                        ) : (
+                          <span className="font-semibold text-slate-800">
+                            {product.physicalStock}
+                          </span>
+                        )}
                       </td>
 
                       {/* Reserved Stock */}
@@ -675,17 +695,24 @@ export default function ProductList({ products }: ProductListProps) {
 
                       {/* Available Stock */}
                       <td className="py-3.5 px-4 text-center">
-                        <span
-                          className={`px-2.5 py-1 rounded-lg font-bold text-xs border ${
-                            product.availableStock > 5
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : product.availableStock > 0
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
-                          }`}
-                        >
-                          {product.availableStock} {product.availableStock === 0 ? '(Habis)' : ''}
-                        </span>
+                        {(() => {
+                          const currentAvailable = isEditing
+                            ? Math.max(0, editPhysicalStock - product.reservedStock)
+                            : product.availableStock;
+                          return (
+                            <span
+                              className={`px-2.5 py-1 rounded-lg font-bold text-xs border ${
+                                currentAvailable > 5
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : currentAvailable > 0
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                  : 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse'
+                              }`}
+                            >
+                              {currentAvailable} {currentAvailable === 0 ? '(Habis)' : ''}
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Status Active / Inactive */}
