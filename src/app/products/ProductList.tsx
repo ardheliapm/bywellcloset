@@ -15,7 +15,7 @@ interface ProductListProps {
 }
 
 type SortOption = 'NEWEST' | 'STOCK_DESC' | 'STOCK_ASC';
-type StockAlertFilter = 'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+type StockAlertFilter = 'ALL' | 'AVAILABLE' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 
 export default function ProductList({ products }: ProductListProps) {
   const router = useRouter();
@@ -158,7 +158,11 @@ export default function ProductList({ products }: ProductListProps) {
     return Array.from(new Set([...fromMaster, ...fromProducts])).filter(Boolean).sort();
   }, [productList, masterTypes]);
 
-  // Hitung jumlah produk stok menipis (<= 5) dan habis (= 0)
+  // Hitung jumlah produk stok available (> 0), stok menipis (<= 5) dan habis (= 0)
+  const availableStockCount = useMemo(() => {
+    return productList.filter((p) => p.availableStock > 0).length;
+  }, [productList]);
+
   const lowStockCount = useMemo(() => {
     return productList.filter((p) => p.availableStock > 0 && p.availableStock <= 5).length;
   }, [productList]);
@@ -192,6 +196,8 @@ export default function ProductList({ products }: ProductListProps) {
       const matchesStockAlert =
         stockAlertFilter === 'ALL'
           ? true
+          : stockAlertFilter === 'AVAILABLE'
+          ? p.availableStock > 0
           : stockAlertFilter === 'LOW_STOCK'
           ? p.availableStock > 0 && p.availableStock <= 5
           : p.availableStock === 0;
@@ -434,6 +440,17 @@ export default function ProductList({ products }: ProductListProps) {
             </button>
             <button
               type="button"
+              onClick={() => setStockAlertFilter('AVAILABLE')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors border flex items-center gap-1 ${
+                stockAlertFilter === 'AVAILABLE'
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Stok Available ({availableStockCount})
+            </button>
+            <button
+              type="button"
               onClick={() => setStockAlertFilter('LOW_STOCK')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors border flex items-center gap-1 ${
                 stockAlertFilter === 'LOW_STOCK'
@@ -452,7 +469,7 @@ export default function ProductList({ products }: ProductListProps) {
                   : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
               }`}
             >
-              Stok Habis ({outOfStockCount})
+              <XCircle className="w-3.5 h-3.5" /> Stok Habis ({outOfStockCount})
             </button>
           </div>
 
