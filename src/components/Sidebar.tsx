@@ -27,7 +27,7 @@ const navItems = [
   { name: 'Daftar Order', href: '/orders', icon: ShoppingBag },
   { name: 'Pre-Order (PO)', href: '/pre-orders', icon: Clock },
   { name: 'Performa Motif', href: '/motif-analysis', icon: PieChart },
-  { name: 'Keuangan & Profit', href: '/finance', icon: Wallet },
+  { name: 'Keuangan & Profit', href: '/finance', icon: Wallet, locked: true },
   { name: 'Riwayat Stok', href: '/stock-history', icon: History },
 ];
 
@@ -106,8 +106,11 @@ export default function Sidebar() {
                     : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
                 }`}
               >
-                <Icon className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                <span>{item.name}</span>
+                <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                <span className="flex-1 truncate">{item.name}</span>
+                {'locked' in item && item.locked && (
+                  <Lock className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-white/80' : 'text-slate-500'}`} />
+                )}
               </Link>
             );
           })}

@@ -2,6 +2,41 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import {
+  checkFinancePassword,
+  setFinanceSessionCookie,
+  clearFinanceSessionCookie,
+  isFinanceUnlocked,
+} from '@/lib/financeAuth';
+
+export async function verifyFinancePassword(passwordInput: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const clean = passwordInput ? passwordInput.trim() : '';
+    if (!clean) {
+      return { success: false, error: 'Silakan masukkan password keamanan.' };
+    }
+
+    const isValid = await checkFinancePassword(clean);
+    if (!isValid) {
+      return { success: false, error: 'Password salah. Akses ke halaman omset ditolak.' };
+    }
+
+    await setFinanceSessionCookie();
+    revalidatePath('/finance');
+    revalidatePath('/');
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error verifying finance password:', error);
+    return { success: false, error: error.message || 'Gagal memverifikasi password.' };
+  }
+}
+
+export async function lockFinance(): Promise<{ success: boolean }> {
+  await clearFinanceSessionCookie();
+  revalidatePath('/finance');
+  revalidatePath('/');
+  return { success: true };
+}
 
 export interface FinanceTransactionRecord {
   id: string;
@@ -45,6 +80,20 @@ export interface FinanceSummaryData {
 
 export async function getFinanceSummary(month?: number, year?: number): Promise<FinanceSummaryData> {
   try {
+    const unlocked = await isFinanceUnlocked();
+    if (!unlocked) {
+      return {
+        totalIncome: 0,
+        totalCOGS: 0,
+        grossProfit: 0,
+        totalExpenses: 0,
+        netProfit: 0,
+        transactions: [],
+        paidOrders: [],
+        availableYears: [new Date().getFullYear()],
+      };
+    }
+
     const selectedYear = year || new Date().getFullYear();
     const isAllMonths = month === 0;
     const isToday = month === -1;

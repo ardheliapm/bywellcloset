@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useTransition, useMemo } from 'react';
-import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight, Printer, Sparkles } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Wallet, Plus, TrendingUp, TrendingDown, DollarSign, Calendar, Filter, Trash2, Pencil, CheckCircle2, AlertCircle, Loader2, FileSpreadsheet, ArrowUpRight, ArrowDownRight, Printer, Sparkles, Lock } from 'lucide-react';
 import XLSX from 'xlsx-js-style';
-import { FinanceSummaryData, FinanceTransactionRecord, addFinanceTransaction, updateFinanceTransaction, deleteFinanceTransaction, getFinanceSummary } from './actions';
+import { FinanceSummaryData, FinanceTransactionRecord, addFinanceTransaction, updateFinanceTransaction, deleteFinanceTransaction, getFinanceSummary, lockFinance } from './actions';
 import FinanceReportModal from './FinanceReportModal';
 
 interface FinanceClientProps {
@@ -13,10 +14,12 @@ interface FinanceClientProps {
 }
 
 export default function FinanceClient({ initialSummary, initialMonth, initialYear }: FinanceClientProps) {
+  const router = useRouter();
   const [summary, setSummary] = useState<FinanceSummaryData>(initialSummary);
   const [selectedMonth, setSelectedMonth] = useState<number>(initialMonth);
   const [selectedYear, setSelectedYear] = useState<number>(initialYear);
   const [isPending, startTransition] = useTransition();
+  const [isLocking, setIsLocking] = useState(false);
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -47,6 +50,13 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
     setDescription(tx.description);
     setError(null);
     setIsModalOpen(true);
+  };
+
+  const handleLockFinance = async () => {
+    if (!confirm('Kunci kembali halaman omset & keuangan ini agar membutuhkan password?')) return;
+    setIsLocking(true);
+    await lockFinance();
+    router.refresh();
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -624,6 +634,21 @@ export default function FinanceClient({ initialSummary, initialMonth, initialYea
             className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs"
           >
             <Plus className="w-4 h-4" /> Catat Transaksi Manual
+          </button>
+
+          <button
+            type="button"
+            onClick={handleLockFinance}
+            disabled={isLocking}
+            title="Kunci kembali halaman omset agar aman dari akses admin"
+            className="px-3.5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+          >
+            {isLocking ? (
+              <Loader2 className="w-4 h-4 animate-spin text-rose-600" />
+            ) : (
+              <Lock className="w-4 h-4 text-rose-600" />
+            )}
+            <span>Kunci Halaman</span>
           </button>
         </div>
       </div>

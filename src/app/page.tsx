@@ -17,7 +17,9 @@ import {
   ChevronRight,
   ArrowDownRight,
   Sparkles,
+  Lock,
 } from 'lucide-react';
+import { isFinanceUnlocked } from '@/lib/financeAuth';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,8 +39,11 @@ export default async function DashboardPage() {
   let allOrders: any[] = [];
   let preOrders: any[] = [];
   let financeTransactions: any[] = [];
+  let isFinanceOpen = false;
 
   try {
+    isFinanceOpen = await isFinanceUnlocked();
+
     // 1. Master Produk
     products = await prisma.product.findMany({
       where: { isActive: true },
@@ -260,23 +265,46 @@ export default async function DashboardPage() {
         </Link>
 
         {/* Total Omset Penjualan */}
-        <Link
-          href="/finance"
-          className="bg-white p-5 rounded-2xl border border-emerald-200/90 shadow-xs hover:border-emerald-300 hover:shadow-md transition-all flex items-center justify-between group bg-gradient-to-br from-white to-emerald-50/30 cursor-pointer"
-        >
-          <div>
-            <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Total Omset Terverifikasi</p>
-            <p className="text-2xl font-black text-emerald-700 mt-1">{formatRupiah(totalOmsetAllTime)}</p>
-            <div className="text-xs text-emerald-700 mt-1 flex items-center gap-1 font-semibold">
-              <span>Hari ini: {formatRupiah(todayOmset)}</span>
-              <span className="text-emerald-300">•</span>
-              <span>{paidOrders.length} Lunas</span>
+        {isFinanceOpen ? (
+          <Link
+            href="/finance"
+            className="bg-white p-5 rounded-2xl border border-emerald-200/90 shadow-xs hover:border-emerald-300 hover:shadow-md transition-all flex items-center justify-between group bg-gradient-to-br from-white to-emerald-50/30 cursor-pointer"
+          >
+            <div>
+              <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Total Omset Terverifikasi</p>
+              <p className="text-2xl font-black text-emerald-700 mt-1">{formatRupiah(totalOmsetAllTime)}</p>
+              <div className="text-xs text-emerald-700 mt-1 flex items-center gap-1 font-semibold">
+                <span>Hari ini: {formatRupiah(todayOmset)}</span>
+                <span className="text-emerald-300">•</span>
+                <span>{paidOrders.length} Lunas</span>
+              </div>
             </div>
-          </div>
-          <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center group-hover:scale-105 transition-transform">
-            <DollarSign className="w-6 h-6" />
-          </div>
-        </Link>
+            <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <DollarSign className="w-6 h-6" />
+            </div>
+          </Link>
+        ) : (
+          <Link
+            href="/finance"
+            className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs hover:border-emerald-300 hover:shadow-md transition-all flex items-center justify-between group bg-gradient-to-br from-white to-slate-50/50 cursor-pointer"
+          >
+            <div>
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Omset Terverifikasi</p>
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60 flex items-center gap-1">
+                  <Lock className="w-2.5 h-2.5" /> Terkunci
+                </span>
+              </div>
+              <p className="text-2xl font-black text-slate-400 mt-1 tracking-widest font-mono">••••••••</p>
+              <div className="text-xs text-slate-400 mt-1 flex items-center gap-1 font-medium">
+                <span>Khusus Owner • Klik untuk buka</span>
+              </div>
+            </div>
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 group-hover:bg-emerald-50 group-hover:text-emerald-600 flex items-center justify-center group-hover:scale-105 transition-all">
+              <Lock className="w-6 h-6" />
+            </div>
+          </Link>
+        )}
       </div>
 
       {/* 2-Column Split: Recent Orders & Stock / PO Activity */}
