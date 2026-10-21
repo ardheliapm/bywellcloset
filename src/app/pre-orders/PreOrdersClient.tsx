@@ -151,6 +151,19 @@ export default function PreOrdersClient({
       }, 0);
   }, [dateFiltered]);
 
+  const readyToPackCount = useMemo(
+    () =>
+      dateFiltered.filter((po) => {
+        if (po.status === 'CANCELLED' || po.status === 'SHIPPED') return false;
+        if (po.paymentStatus !== 'PAID') return false;
+        const readyPcs = po.items.reduce(
+          (sub, it) => sub + Math.max(0, it.quantityFulfilled - it.quantityShipped),
+          0
+        );
+        return readyPcs > 0;
+      }).length,
+    [dateFiltered]
+  );
   const waitingPoCount = useMemo(
     () => dateFiltered.filter((po) => po.status === 'WAITING_STOCK').length,
     [dateFiltered]
@@ -186,7 +199,17 @@ export default function PreOrdersClient({
         );
 
       let matchesStatus = true;
-      if (statusFilter === 'WAITING_STOCK') {
+      if (statusFilter === 'READY_TO_PACK') {
+        if (po.status === 'CANCELLED' || po.status === 'SHIPPED') matchesStatus = false;
+        else if (po.paymentStatus !== 'PAID') matchesStatus = false;
+        else {
+          const readyPcs = po.items.reduce(
+            (sub, it) => sub + Math.max(0, it.quantityFulfilled - it.quantityShipped),
+            0
+          );
+          matchesStatus = readyPcs > 0;
+        }
+      } else if (statusFilter === 'WAITING_STOCK') {
         matchesStatus = po.status === 'WAITING_STOCK';
       } else if (statusFilter === 'PARTIAL_READY') {
         matchesStatus = po.status === 'PARTIAL_READY' || po.status === 'PARTIAL_SHIPPED';
@@ -373,12 +396,13 @@ export default function PreOrdersClient({
         {/* Status Filter Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs border-t border-slate-100 pt-2.5">
           {[
-            { id: 'ALL', label: `Semua (${dateFiltered.length})` },
-            { id: 'WAITING_STOCK', label: `Menunggu Kedatangan (${waitingPoCount})` },
-            { id: 'PARTIAL_READY', label: `Sebagian Ready (${partialReadyCount})` },
-            { id: 'READY', label: `Siap Kirim (${readyCount})` },
-            { id: 'SHIPPED', label: `Sudah Dikirim (${shippedCount})` },
-            { id: 'CANCELLED', label: `Batal (${cancelledCount})` },
+            { id: 'ALL', label: `Semua (${dateFiltered.length})`, isSpecial: false },
+            { id: 'READY_TO_PACK', label: `📦 Siap Packing (${readyToPackCount})`, isSpecial: true },
+            { id: 'WAITING_STOCK', label: `Menunggu Kedatangan (${waitingPoCount})`, isSpecial: false },
+            { id: 'PARTIAL_READY', label: `Sebagian Ready (${partialReadyCount})`, isSpecial: false },
+            { id: 'READY', label: `Siap Kirim (${readyCount})`, isSpecial: false },
+            { id: 'SHIPPED', label: `Sudah Dikirim (${shippedCount})`, isSpecial: false },
+            { id: 'CANCELLED', label: `Batal (${cancelledCount})`, isSpecial: false },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -386,7 +410,11 @@ export default function PreOrdersClient({
               onClick={() => setStatusFilter(tab.id)}
               className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 statusFilter === tab.id
-                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  ? tab.isSpecial
+                    ? 'bg-emerald-600 text-white shadow-2xs font-bold'
+                    : 'bg-indigo-600 text-white shadow-2xs font-bold'
+                  : tab.isSpecial
+                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 font-bold'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >

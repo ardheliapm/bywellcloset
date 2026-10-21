@@ -129,12 +129,45 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
     });
   }, [orders, selectedMonth, selectedYear]);
 
+  // Helper functions for payment & packing status
+  const isOrderPaid = (o: OrderRecord) => {
+    if (o.orderType === 'PRE_ORDER') {
+      return o.paymentStatus === 'PAID' || o.status === 'SHIPPED';
+    }
+    return o.status === 'PAID' || o.status === 'SHIPPED';
+  };
+
+  const getOrderReadyPcs = (o: OrderRecord) => {
+    if (o.orderType === 'PRE_ORDER') {
+      return o.items.reduce(
+        (acc, it) => acc + Math.max(0, (it.quantityFulfilled ?? 0) - (it.quantityShipped ?? 0)),
+        0
+      );
+    }
+    if (o.status === 'PAID') {
+      return o.items.reduce((acc, it) => acc + (it.quantity || 1), 0);
+    }
+    return 0;
+  };
+
+  const isOrderReadyToPack = (o: OrderRecord) => {
+    if (o.status === 'CANCELLED' || o.status === 'SHIPPED') return false;
+    if (!isOrderPaid(o)) return false; // MUST be paid!
+    return getOrderReadyPcs(o) > 0;
+  };
+
+  const isOrderUnpaid = (o: OrderRecord) => {
+    if (o.status === 'CANCELLED') return false;
+    return !isOrderPaid(o);
+  };
+
   // KPI Summary Counts (based on Month & Year date period)
   const regularCount = useMemo(() => dateFilteredOrders.filter((o) => o.orderType !== 'PRE_ORDER').length, [dateFilteredOrders]);
   const poCount = useMemo(() => dateFilteredOrders.filter((o) => o.orderType === 'PRE_ORDER').length, [dateFilteredOrders]);
   
-  const holdCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'HOLD' || o.status === 'WAITING_STOCK').length, [dateFilteredOrders]);
-  const paidCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'PAID' || o.status === 'READY' || o.status === 'PARTIAL_READY').length, [dateFilteredOrders]);
+  const readyToPackCount = useMemo(() => dateFilteredOrders.filter(isOrderReadyToPack).length, [dateFilteredOrders]);
+  const holdCount = useMemo(() => dateFilteredOrders.filter(isOrderUnpaid).length, [dateFilteredOrders]);
+  const paidCount = useMemo(() => dateFilteredOrders.filter((o) => isOrderPaid(o) && o.status !== 'CANCELLED').length, [dateFilteredOrders]);
   const shippedCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'SHIPPED' || o.status === 'PARTIAL_SHIPPED').length, [dateFilteredOrders]);
   const cancelledCount = useMemo(() => dateFilteredOrders.filter((o) => o.status === 'CANCELLED').length, [dateFilteredOrders]);
 
@@ -158,18 +191,18 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       }
 
       let matchesStatus = true;
-      if (statusFilter === 'HOLD') {
-        matchesStatus = order.status === 'HOLD' || order.status === 'WAITING_STOCK';
+      if (statusFilter === 'READY_TO_PACK') {
+        matchesStatus = isOrderReadyToPack(order);
+      } else if (statusFilter === 'HOLD') {
+        matchesStatus = isOrderUnpaid(order);
       } else if (statusFilter === 'PAID') {
-        matchesStatus = order.status === 'PAID' || order.status === 'READY' || order.status === 'PARTIAL_READY';
+        matchesStatus = isOrderPaid(order) && order.status !== 'CANCELLED';
       } else if (statusFilter === 'SHIPPED') {
         matchesStatus = order.status === 'SHIPPED' || order.status === 'PARTIAL_SHIPPED';
       } else if (statusFilter === 'CANCELLED') {
         matchesStatus = order.status === 'CANCELLED';
-      } else if (statusFilter === 'PO_WAITING') {
-        matchesStatus = order.status === 'WAITING_STOCK';
-      } else if (statusFilter === 'PO_READY') {
-        matchesStatus = order.status === 'READY' || order.status === 'PARTIAL_READY';
+      } else if (statusFilter === 'PO_ONLY') {
+        matchesStatus = order.orderType === 'PRE_ORDER';
       }
 
       return matchesSearch && matchesType && matchesStatus;
@@ -434,31 +467,57 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
         </div>
 
         {/* Hold / Menunggu */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'HOLD' ? 'ALL' : 'HOLD')}
+          className={`p-4 rounded-xl border shadow-xs flex items-center justify-between cursor-pointer transition-all ${
+            statusFilter === 'HOLD'
+              ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-500/20'
+              : 'bg-white border-slate-200 hover:border-amber-200'
+          }`}
+          title="Klik untuk filter pesanan yang belum bayar"
+        >
           <div>
-            <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider">Keep / Menunggu</p>
+            <p className="text-xs font-semibold text-amber-600 uppercase tracking-wider">Belum Bayar</p>
             <p className="text-2xl font-bold text-amber-600 mt-0.5">{holdCount} Pesanan</p>
-            <span className="text-[11px] text-amber-600/80">Belum bayar / nunggu stok PO</span>
+            <span className="text-[11px] text-amber-600/80">Menunggu transfer customer</span>
           </div>
           <div className="w-10 h-10 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
             <Clock className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Paid / PO Ready */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
+        {/* Siap Packing & Kirim (Tim Packing) */}
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'READY_TO_PACK' ? 'ALL' : 'READY_TO_PACK')}
+          className={`p-4 rounded-xl border shadow-xs flex items-center justify-between cursor-pointer transition-all ${
+            statusFilter === 'READY_TO_PACK'
+              ? 'bg-emerald-100/70 border-emerald-400 ring-2 ring-emerald-500/30'
+              : 'bg-emerald-50/50 border-emerald-200 hover:border-emerald-300'
+          }`}
+          title="Klik untuk filter pesanan yang siap dipacking & dikirim"
+        >
           <div>
-            <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider">Lunas / Ready Kirim</p>
-            <p className="text-2xl font-bold text-emerald-600 mt-0.5">{paidCount} Pesanan</p>
-            <span className="text-[11px] text-emerald-600/80">Siap dipacking & kirim</span>
+            <p className="text-xs font-bold text-emerald-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Package className="w-3.5 h-3.5 text-emerald-600" /> Siap Packing & Kirim
+            </p>
+            <p className="text-2xl font-black text-emerald-700 mt-0.5">{readyToPackCount} Pesanan</p>
+            <span className="text-[11px] text-emerald-700/90 font-medium">✨ Sudah lunas & barang ready</span>
           </div>
-          <div className="w-10 h-10 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <CheckCircle2 className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-lg bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+            <Package className="w-5 h-5" />
           </div>
         </div>
 
         {/* Shipped */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setStatusFilter(statusFilter === 'SHIPPED' ? 'ALL' : 'SHIPPED')}
+          className={`p-4 rounded-xl border shadow-xs flex items-center justify-between cursor-pointer transition-all ${
+            statusFilter === 'SHIPPED'
+              ? 'bg-blue-50 border-blue-300 ring-2 ring-blue-500/20'
+              : 'bg-white border-slate-200 hover:border-blue-200'
+          }`}
+          title="Klik untuk filter pesanan yang sudah dikirim"
+        >
           <div>
             <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Sudah Dikirim</p>
             <p className="text-2xl font-bold text-blue-600 mt-0.5">{shippedCount} Pesanan</p>
@@ -604,6 +663,20 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
             Semua Status ({dateFilteredOrders.length})
           </button>
 
+          {/* TAB UTAMA TIM PACKING */}
+          <button
+            type="button"
+            onClick={() => setStatusFilter('READY_TO_PACK')}
+            className={`px-3.5 py-1.5 rounded-md text-xs font-black whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+              statusFilter === 'READY_TO_PACK'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-emerald-800 bg-emerald-100/90 hover:bg-emerald-200 border border-emerald-300 shadow-2xs'
+            }`}
+            title="Khusus Tim Packing: Pesanan yang sudah lunas dan ada barang ready untuk dikirim"
+          >
+            <Package className="w-3.5 h-3.5 text-emerald-700" /> 📦 Siap Packing ({readyToPackCount})
+          </button>
+
           <button
             type="button"
             onClick={() => setStatusFilter('PO_ONLY')}
@@ -625,7 +698,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
-            Keep / Belum Bayar ({holdCount})
+            Belum Bayar ({holdCount})
           </button>
 
           <button
@@ -637,7 +710,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
-            Lunas / Ready ({paidCount})
+            Lunas ({paidCount})
           </button>
 
           <button
