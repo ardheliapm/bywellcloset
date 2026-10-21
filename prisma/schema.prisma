@@ -87,6 +87,9 @@ model PreOrder {
   customerPhone String?        @map("customer_phone")
   status        String         @default("WAITING_STOCK") // WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED, SHIPPED, CANCELLED
   totalAmount   Int            @default(0) @map("total_amount")
+  paymentStatus String         @default("UNPAID") @map("payment_status") // UNPAID, PAID
+  paidAt        DateTime?      @map("paid_at")
+  shippedAt     DateTime?      @map("shipped_at")
   notes         String?
   createdAt     DateTime       @default(now()) @map("created_at")
   updatedAt     DateTime       @updatedAt @map("updated_at")

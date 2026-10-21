@@ -22,7 +22,8 @@ import {
   Layers,
   Boxes,
   Send,
-  Sparkles
+  Sparkles,
+  Check
 } from 'lucide-react';
 import Link from 'next/link';
 import InvoiceModal, { OrderDetail } from './InvoiceModal';
@@ -32,7 +33,7 @@ import PreOrderInvoiceModal from '../pre-orders/PreOrderInvoiceModal';
 import ShipPreOrderModal from '../pre-orders/ShipPreOrderModal';
 import EditPreOrderModal from '../pre-orders/EditPreOrderModal';
 import AddPreOrderItemsModal from '../pre-orders/AddPreOrderItemsModal';
-import { PreOrderRecord, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
+import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
 import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
 
@@ -351,6 +352,8 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       if (confirmDialog.type === 'PAY') {
         if (!isPo) {
           res = await markOrderAsPaid(orderId);
+        } else {
+          res = await markPreOrderAsPaid(orderId);
         }
       } else if (confirmDialog.type === 'SHIP') {
         if (!isPo) {
@@ -837,6 +840,19 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                                 <XCircle className="w-3 h-3" /> Dibatalkan
                               </span>
                             )}
+
+                            {/* Payment status badge for PO */}
+                            {order.status !== 'CANCELLED' && (
+                              order.paymentStatus === 'PAID' || order.status === 'SHIPPED' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs mt-1">
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" /> Lunas
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100/70 text-amber-800 border border-amber-200 mt-1">
+                                  Belum Bayar
+                                </span>
+                              )
+                            )}
                           </>
                         )}
                       </td>
@@ -918,13 +934,14 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             </button>
                           )}
 
-                          {/* Regular Order Specific Actions: Mark Paid */}
-                          {!isPo && order.status === 'HOLD' && (
+                          {/* Mark Paid (Order Reguler & Pre-Order) */}
+                          {((!isPo && order.status === 'HOLD') ||
+                            (isPo && order.paymentStatus !== 'PAID' && order.status !== 'CANCELLED' && order.status !== 'SHIPPED')) && (
                             <button
                               type="button"
                               onClick={() => openConfirmModal('PAY', order)}
                               className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
-                              title="Tandai pesanan lunas & potong stok fisik"
+                              title={isPo ? "Tandai Pre-Order lunas & catat pemasukan keuangan" : "Tandai pesanan lunas & potong stok fisik"}
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" /> Bayar
                             </button>

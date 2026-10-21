@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import { markPreOrderAsPaid } from '../pre-orders/actions';
 
 export interface OrderItemRecord {
   id: string;
@@ -24,6 +25,7 @@ export interface OrderRecord {
   status: string; // HOLD, PAID, SHIPPED, CANCELLED, WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED
   totalAmount: number;
   notes: string | null;
+  paymentStatus?: string; // UNPAID, PAID
   paidAt: Date | null;
   shippedAt: Date | null;
   createdAt: Date;
@@ -65,6 +67,7 @@ export async function getOrders(): Promise<OrderRecord[]> {
 
     const mappedRegularOrders: OrderRecord[] = orders.map((o) => ({
       ...o,
+      paymentStatus: o.status === 'PAID' || o.status === 'SHIPPED' ? 'PAID' : 'UNPAID',
       orderType: 'REGULAR',
     }));
 
@@ -76,8 +79,9 @@ export async function getOrders(): Promise<OrderRecord[]> {
       status: po.status,
       totalAmount: po.totalAmount,
       notes: po.notes,
-      paidAt: null,
-      shippedAt: null,
+      paymentStatus: po.paymentStatus || (po.status === 'SHIPPED' ? 'PAID' : 'UNPAID'),
+      paidAt: po.paidAt,
+      shippedAt: po.shippedAt,
       createdAt: po.createdAt,
       updatedAt: po.updatedAt,
       items: po.items.map((it) => ({
@@ -124,6 +128,11 @@ export async function markOrderAsPaid(orderId: string) {
     });
 
     if (!order) {
+      // Check if this is a PreOrder
+      const po = await prisma.preOrder.findUnique({ where: { id: orderId } });
+      if (po) {
+        return await markPreOrderAsPaid(orderId);
+      }
       return { success: false, error: 'Order tidak ditemukan' };
     }
 

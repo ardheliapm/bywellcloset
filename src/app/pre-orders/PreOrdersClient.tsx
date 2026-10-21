@@ -22,7 +22,7 @@ import {
   Boxes,
   Edit3,
 } from 'lucide-react';
-import { PreOrderRecord, cancelPreOrder, deletePreOrder } from './actions';
+import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder } from './actions';
 import { ProductItem } from '../products/actions';
 import CreatePreOrderModal from './CreatePreOrderModal';
 import PreOrderInvoiceModal from './PreOrderInvoiceModal';
@@ -54,11 +54,11 @@ export default function PreOrdersClient({
   // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
-    type: 'CANCEL' | 'DELETE';
+    type: 'PAY' | 'CANCEL' | 'DELETE';
     po: PreOrderRecord | null;
   }>({
     isOpen: false,
-    type: 'CANCEL',
+    type: 'PAY',
     po: null,
   });
   const [actionLoading, setActionLoading] = useState(false);
@@ -194,14 +194,29 @@ export default function PreOrdersClient({
     if (!confirmDialog.po) return;
     setActionLoading(true);
 
-    if (confirmDialog.type === 'CANCEL') {
-      await cancelPreOrder(confirmDialog.po.id);
-    } else if (confirmDialog.type === 'DELETE') {
-      await deletePreOrder(confirmDialog.po.id);
+    try {
+      if (confirmDialog.type === 'PAY') {
+        const res = await markPreOrderAsPaid(confirmDialog.po.id);
+        if (!res.success) {
+          alert(res.error || 'Gagal menandai Pre-Order lunas.');
+        }
+      } else if (confirmDialog.type === 'CANCEL') {
+        const res = await cancelPreOrder(confirmDialog.po.id);
+        if (!res.success) {
+          alert(res.error || 'Gagal membatalkan Pre-Order.');
+        }
+      } else if (confirmDialog.type === 'DELETE') {
+        const res = await deletePreOrder(confirmDialog.po.id);
+        if (!res.success) {
+          alert(res.error || 'Gagal menghapus Pre-Order.');
+        }
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Terjadi kesalahan sistem.');
+    } finally {
+      setActionLoading(false);
+      setConfirmDialog({ isOpen: false, type: 'PAY', po: null });
     }
-
-    setActionLoading(false);
-    setConfirmDialog({ isOpen: false, type: 'CANCEL', po: null });
   };
 
   return (
@@ -386,6 +401,8 @@ export default function PreOrdersClient({
                   const totalPcsShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
                   const readyToShipPcs = totalPcsFulfilled - totalPcsShipped;
 
+                  const isPaid = po.paymentStatus === 'PAID' || po.status === 'SHIPPED';
+
                   return (
                     <tr key={po.id} className="hover:bg-slate-50/60 transition-colors">
                       {/* PO Number & Date */}
@@ -475,31 +492,46 @@ export default function PreOrdersClient({
 
                       {/* Status Badge */}
                       <td className="py-3.5 px-4 text-center">
-                        {po.status === 'WAITING_STOCK' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            <Clock className="w-3 h-3" /> Menunggu Barang
-                          </span>
-                        )}
-                        {(po.status === 'PARTIAL_READY' || po.status === 'PARTIAL_SHIPPED') && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
-                            <Layers className="w-3 h-3" /> Sebagian Ready ({readyToShipPcs} pcs)
-                          </span>
-                        )}
-                        {po.status === 'READY' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3" /> Siap Kirim Full
-                          </span>
-                        )}
-                        {po.status === 'SHIPPED' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                            <Truck className="w-3 h-3" /> Sudah Dikirim
-                          </span>
-                        )}
-                        {po.status === 'CANCELLED' && (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
-                            <XCircle className="w-3 h-3" /> Dibatalkan
-                          </span>
-                        )}
+                        <div className="flex flex-col items-center gap-1.5">
+                          {po.status === 'WAITING_STOCK' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              <Clock className="w-3 h-3" /> Menunggu Barang
+                            </span>
+                          )}
+                          {(po.status === 'PARTIAL_READY' || po.status === 'PARTIAL_SHIPPED') && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
+                              <Layers className="w-3 h-3" /> Sebagian Ready ({readyToShipPcs} pcs)
+                            </span>
+                          )}
+                          {po.status === 'READY' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3" /> Siap Kirim Full
+                            </span>
+                          )}
+                          {po.status === 'SHIPPED' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                              <Truck className="w-3 h-3" /> Sudah Dikirim
+                            </span>
+                          )}
+                          {po.status === 'CANCELLED' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                              <XCircle className="w-3 h-3" /> Dibatalkan
+                            </span>
+                          )}
+
+                          {/* Payment status badge */}
+                          {po.status !== 'CANCELLED' && (
+                            isPaid ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
+                                <Check className="w-2.5 h-2.5 text-emerald-600" /> Lunas
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100/70 text-amber-800 border border-amber-200">
+                                Belum Bayar
+                              </span>
+                            )
+                          )}
+                        </div>
                       </td>
 
                       {/* Actions */}
@@ -536,6 +568,18 @@ export default function PreOrdersClient({
                               title="Tambah item baru ke antrean PO ini (Paste WA / Manual)"
                             >
                               <Plus className="w-3.5 h-3.5" /> Tambah
+                            </button>
+                          )}
+
+                          {/* Tombol Bayar (Jika belum lunas dan belum dibatalkan/dikirim) */}
+                          {!isPaid && po.status !== 'CANCELLED' && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDialog({ isOpen: true, type: 'PAY', po })}
+                              className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                              title="Tandai Pre-Order ini telah dibayar (Lunas) & catat pemasukan keuangan"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Bayar
                             </button>
                           )}
 
@@ -627,37 +671,67 @@ export default function PreOrdersClient({
             <div className="text-center space-y-2">
               <div
                 className={`w-12 h-12 rounded-2xl flex items-center justify-center mx-auto ${
-                  confirmDialog.type === 'CANCEL'
+                  confirmDialog.type === 'PAY'
+                    ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                    : confirmDialog.type === 'CANCEL'
                     ? 'bg-amber-50 text-amber-600 border border-amber-200'
                     : 'bg-rose-50 text-rose-600 border border-rose-200'
                 }`}
               >
-                {confirmDialog.type === 'CANCEL' ? <AlertTriangle className="w-6 h-6" /> : <Trash2 className="w-6 h-6" />}
+                {confirmDialog.type === 'PAY' ? (
+                  <CheckCircle2 className="w-6 h-6" />
+                ) : confirmDialog.type === 'CANCEL' ? (
+                  <AlertTriangle className="w-6 h-6" />
+                ) : (
+                  <Trash2 className="w-6 h-6" />
+                )}
               </div>
 
               <h3 className="text-lg font-bold text-slate-800">
-                {confirmDialog.type === 'CANCEL' ? 'Batalkan Pre-Order' : 'Hapus Pre-Order Permanen'}
+                {confirmDialog.type === 'PAY'
+                  ? 'Konfirmasi Pembayaran Pre-Order'
+                  : confirmDialog.type === 'CANCEL'
+                  ? 'Batalkan Pre-Order'
+                  : 'Hapus Pre-Order Permanen'}
               </h3>
 
-              <p className="text-sm text-slate-500">
-                {confirmDialog.type === 'CANCEL' ? (
-                  <>
+              <div className="text-sm text-slate-500">
+                {confirmDialog.type === 'PAY' ? (
+                  <div className="space-y-2 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">No. PO:</span>
+                      <strong className="text-indigo-900 font-mono">#{confirmDialog.po.poNumber}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Customer:</span>
+                      <strong className="text-slate-800">{confirmDialog.po.customerName}</strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Total Tagihan:</span>
+                      <strong className="text-emerald-700 font-bold">{formatRupiah(confirmDialog.po.totalAmount)}</strong>
+                    </div>
+                    <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-200">
+                      Tandai PO ini telah dibayar (Lunas). Pemasukan otomatis tercatat di Laporan Keuangan.
+                    </p>
+                  </div>
+                ) : confirmDialog.type === 'CANCEL' ? (
+                  <p>
                     Yakin ingin membatalkan Pre-Order <strong>#{confirmDialog.po.poNumber}</strong> ({confirmDialog.po.customerName})? Jika ada stok yang sudah ditahan untuk PO ini, stok tersebut akan otomatis dilepaskan kembali ke gudang.
-                  </>
+                  </p>
                 ) : (
-                  <>
+                  <p>
                     Hapus data Pre-Order <strong>#{confirmDialog.po.poNumber}</strong> secara permanen dari basis data?
-                  </>
+                  </p>
                 )}
-              </p>
+              </div>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
                 disabled={actionLoading}
-                onClick={() => setConfirmDialog({ isOpen: false, type: 'CANCEL', po: null })}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                onClick={() => setConfirmDialog({ isOpen: false, type: 'PAY', po: null })}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
               >
                 Batal
               </button>
@@ -666,8 +740,10 @@ export default function PreOrdersClient({
                 type="button"
                 disabled={actionLoading}
                 onClick={handleExecuteAction}
-                className={`px-5 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 ${
-                  confirmDialog.type === 'CANCEL'
+                className={`px-5 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer ${
+                  confirmDialog.type === 'PAY'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : confirmDialog.type === 'CANCEL'
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-rose-600 hover:bg-rose-700'
                 }`}
@@ -678,7 +754,11 @@ export default function PreOrdersClient({
                   </>
                 ) : (
                   <>
-                    {confirmDialog.type === 'CANCEL' ? 'Ya, Batalkan PO' : 'Ya, Hapus Permanen'}
+                    {confirmDialog.type === 'PAY'
+                      ? 'Ya, Tandai Lunas'
+                      : confirmDialog.type === 'CANCEL'
+                      ? 'Ya, Batalkan PO'
+                      : 'Ya, Hapus Permanen'}
                   </>
                 )}
               </button>

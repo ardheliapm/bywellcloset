@@ -38,6 +38,9 @@ export interface PreOrderRecord {
   customerPhone: string | null;
   status: string; // WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED, SHIPPED, CANCELLED
   totalAmount: number;
+  paymentStatus: string; // UNPAID, PAID
+  paidAt: Date | null;
+  shippedAt: Date | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -328,15 +331,19 @@ export async function shipPreOrderItems(
           nextStatus = 'PARTIAL_READY';
         }
 
+        const wasAlreadyPaid = po.paymentStatus === 'PAID';
+
         await tx.preOrder.update({
           where: { id: poId },
           data: {
             status: nextStatus,
+            ...(isAllFullyShipped ? { shippedAt: new Date() } : {}),
+            ...(!wasAlreadyPaid ? { paymentStatus: 'PAID', paidAt: new Date() } : {}),
           },
         });
 
-        // 4. Record Finance Income Transaction for this shipment
-        if (shipmentTotalAmount > 0) {
+        // 4. Record Finance Income Transaction for this shipment only if not already paid
+        if (!wasAlreadyPaid && shipmentTotalAmount > 0) {
           await tx.financeTransaction.create({
             data: {
               type: 'INCOME',
@@ -354,12 +361,69 @@ export async function shipPreOrderItems(
     revalidatePath('/pre-orders');
     revalidatePath('/products');
     revalidatePath('/finance');
+    revalidatePath('/orders');
     revalidatePath('/');
 
     return { success: true };
   } catch (error: any) {
     console.error('Error shipping pre-order items:', error);
     return { success: false, error: error.message || 'Gagal memproses pengiriman PO' };
+  }
+}
+
+// 4. Mark Pre-Order as Paid (Tandai Lunas & Catat Pemasukan ke Laporan Keuangan)
+export async function markPreOrderAsPaid(poId: string, paymentNotes?: string) {
+  try {
+    const po = await prisma.preOrder.findUnique({
+      where: { id: poId },
+    });
+
+    if (!po) {
+      return { success: false, error: 'Data Pre-Order tidak ditemukan.' };
+    }
+
+    if (po.status === 'CANCELLED') {
+      return { success: false, error: 'Pre-Order ini sudah dibatalkan.' };
+    }
+
+    if (po.paymentStatus === 'PAID') {
+      return { success: false, error: 'Pre-Order ini sudah dalam status Lunas.' };
+    }
+
+    await prisma.$transaction(
+      async (tx) => {
+        // 1. Update PreOrder payment status
+        await tx.preOrder.update({
+          where: { id: poId },
+          data: {
+            paymentStatus: 'PAID',
+            paidAt: new Date(),
+          },
+        });
+
+        // 2. Record Finance Income Transaction
+        await tx.financeTransaction.create({
+          data: {
+            type: 'INCOME',
+            category: 'SALES',
+            amount: Math.max(0, Math.floor(po.totalAmount)),
+            description: `Pembayaran Lunas Pre-Order #${po.poNumber} (${po.customerName})${paymentNotes ? ` [${paymentNotes}]` : ''}`,
+            referenceId: po.poNumber,
+          },
+        });
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
+
+    revalidatePath('/pre-orders');
+    revalidatePath('/orders');
+    revalidatePath('/finance');
+    revalidatePath('/');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error marking pre-order as paid:', error);
+    return { success: false, error: error.message || 'Gagal menandai Pre-Order lunas.' };
   }
 }
 

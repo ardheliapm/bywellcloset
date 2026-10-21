@@ -147,15 +147,16 @@ ${preOrder.customerPhone ? `No. WhatsApp: ${preOrder.customerPhone}\n` : ''}
 ${itemsText}------------------------------
 *Total Kuantitas: ${currentTotalPcs} pcs*
 *Total Pembayaran: ${formatRupiah(currentTotalNominal)}*
+*Status Pembayaran:* *${preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? '✅ LUNAS' : '⏳ MENUNGGU PEMBAYARAN'}*
 
-*Pembayaran dapat ditransfer melalui:*
+${preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? `✨ *Pesanan sudah LUNAS.* Terima kasih banyak atas pembayarannya ya Kak! Barang akan segera kami siapkan & kirimkan. 🙏` : `*Pembayaran dapat ditransfer melalui:*
 🏦 *Bank Jago*: 1057 0424 9859
 a/n Ardhe Lia Putri Maharani
 💜 *ShopeePay*: 081230543855
 a/n Ardhe Lia Putri Maharani
 
 Mohon kirimkan bukti transfer setelah pembayaran ya Kak.
-Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`
+Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`}`
     );
   };
 
@@ -366,6 +367,17 @@ Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
                     DIBATALKAN
                   </span>
+                )}
+                {preOrder.status !== 'CANCELLED' && (
+                  preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? (
+                    <span className="ml-1.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      LUNAS
+                    </span>
+                  ) : (
+                    <span className="ml-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      BELUM LUNAS
+                    </span>
+                  )
                 )}
               </div>
             </div>
