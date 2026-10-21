@@ -69,6 +69,19 @@ export function findInboundProductMatch(
   );
   if (byCode.length) return prefer(byCode);
 
+  // 2b. Within same category: if code has suffix like "-1", try base code (e.g. "37-1" matches "37")
+  const baseCode = code.replace(/[-_]\d+$/, '').trim();
+  const nBaseCode = norm(baseCode);
+  if (nBaseCode && nBaseCode !== nCode) {
+    const byBaseCode = sameCat.filter(
+      (p) =>
+        norm(p.sku) === nBaseCode ||
+        norm(p.sku.replace(PREFIX_RE, '')) === nBaseCode ||
+        (p.motif && norm(p.motif) === nBaseCode)
+    );
+    if (byBaseCode.length) return prefer(byBaseCode);
+  }
+
   // 3. Within same category: full name "NAME - MOTIF" equals the raw name
   const nName = norm(rawName);
   const byName = sameCat.filter((p) => nName && norm(`${p.name}${p.motif || ''}`) === nName);

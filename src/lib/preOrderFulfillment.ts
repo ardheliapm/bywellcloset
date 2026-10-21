@@ -61,6 +61,19 @@ export function isProductMatchItem(
     if (!isProductParis && !isProductBella && !isItemParis && !isItemBella) return true;
   }
 
+  // 3b. Suffix roll/batch variation (e.g. "37-1", "37-2", "PJ-37-1" matches "37", "PJ-37")
+  const pBaseCode = pCode.replace(/[-_]\d+$/, '').trim();
+  const itBaseCode = itCode.replace(/[-_]\d+$/, '').trim();
+  if ((itBaseCode === pCode || itCode === pBaseCode || (itBaseCode && itBaseCode === pBaseCode)) && (itBaseCode || pBaseCode)) {
+    const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
+    const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
+    const isProductBella = pName.includes('bella') || pSku.startsWith('bs');
+    const isItemBella = itName.includes('bella') || itSku.startsWith('bs');
+    if (isProductParis && isItemParis) return true;
+    if (isProductBella && isItemBella) return true;
+    if (!isProductParis && !isProductBella && !isItemParis && !isItemBella) return true;
+  }
+
   // 4. Extract motif from item name (e.g. "PARIS JAPAN - 88" -> motif "88")
   if (itName.includes('-')) {
     const extractedMotif = itName.split('-').slice(1).join('-').trim().toLowerCase();
@@ -101,11 +114,11 @@ export async function allocateStockToWaitingPreOrders(
   let remainingQty = availableQtyToAllocate;
   const fulfilledPoNumbers: string[] = [];
 
-  // 1. Find all waiting Pre-Order items
+  // 1. Find all waiting Pre-Order items from active POs
   const waitingPoItems = await tx.preOrderItem.findMany({
     where: {
       preOrder: {
-        status: { in: ['WAITING_STOCK', 'PARTIAL_READY'] },
+        status: { notIn: ['CANCELLED', 'SHIPPED'] },
       },
     },
     include: {
@@ -210,7 +223,7 @@ export async function allocateStockToWaitingPreOrdersBatch(
   // 1. Fetch ALL waiting Pre-Orders and their items in ONE query
   const waitingPreOrders = await tx.preOrder.findMany({
     where: {
-      status: { in: ['WAITING_STOCK', 'PARTIAL_READY'] },
+      status: { notIn: ['CANCELLED', 'SHIPPED'] },
     },
     include: {
       items: {

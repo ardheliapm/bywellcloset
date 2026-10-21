@@ -21,8 +21,9 @@ import {
   Send,
   Boxes,
   Edit3,
+  RefreshCw,
 } from 'lucide-react';
-import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder } from './actions';
+import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder, resyncAllPreOrderStock } from './actions';
 import { ProductItem } from '../products/actions';
 import CreatePreOrderModal from './CreatePreOrderModal';
 import PreOrderInvoiceModal from './PreOrderInvoiceModal';
@@ -62,6 +63,16 @@ export default function PreOrdersClient({
     po: null,
   });
   const [actionLoading, setActionLoading] = useState(false);
+  const [isResyncing, setIsResyncing] = useState(false);
+
+  const handleResync = async () => {
+    setIsResyncing(true);
+    const res = await resyncAllPreOrderStock();
+    setIsResyncing(false);
+    if (!res.success) {
+      alert(res.error || 'Gagal menyinkronkan stok.');
+    }
+  };
 
   const formatRupiah = (val: number) => {
     return new Intl.NumberFormat('id-ID', {
@@ -235,13 +246,26 @@ export default function PreOrdersClient({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsCreateModalOpen(true)}
-          className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm flex items-center gap-2 transition-colors cursor-pointer self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" /> Catat Pre-Order Baru
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            type="button"
+            disabled={isResyncing}
+            onClick={handleResync}
+            className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+            title="Hitung ulang stok fisik vs penahan, dan alokasikan stok yang tersedia ke antrean PO"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isResyncing ? 'animate-spin' : ''}`} />
+            <span>{isResyncing ? 'Menyinkronkan...' : 'Sinkronkan Alokasi'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsCreateModalOpen(true)}
+            className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm flex items-center gap-2 transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" /> Catat Pre-Order Baru
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}

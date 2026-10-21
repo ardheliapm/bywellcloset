@@ -2,7 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { isProductMatchItem } from '@/lib/preOrderFulfillment';
+import { isProductMatchItem, allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
 import {
   findProductMasterType,
   calculateProductPrice,
@@ -981,6 +981,94 @@ export async function addItemsToPreOrder(
   } catch (error: any) {
     console.error('Error adding items to pre-order:', error);
     return { success: false, error: error.message || 'Gagal menambahkan item ke Pre-Order' };
+  }
+}
+
+// 7. Audit & Resync all Product Reserved Stocks and Pre-Order Allocations
+export async function resyncAllPreOrderStock() {
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        // 1. Recalculate true reservedStock for ALL products
+        const products = await tx.product.findMany();
+
+        for (const p of products) {
+          const regItems = await tx.orderItem.findMany({
+            where: {
+              productId: p.id,
+              order: { status: 'HOLD' },
+            },
+          });
+          const regHeld = regItems.reduce((acc, it) => acc + it.quantity, 0);
+
+          const poItems = await tx.preOrderItem.findMany({
+            where: {
+              productId: p.id,
+              preOrder: { status: { notIn: ['CANCELLED', 'SHIPPED'] } },
+            },
+          });
+          const poHeld = poItems.reduce(
+            (acc, it) => acc + Math.max(0, it.quantityFulfilled - it.quantityShipped),
+            0
+          );
+
+          const trueReserved = regHeld + poHeld;
+          if (p.reservedStock !== trueReserved) {
+            await tx.product.update({
+              where: { id: p.id },
+              data: { reservedStock: trueReserved },
+            });
+            p.reservedStock = trueReserved;
+          }
+
+          // 2. If product has available stock, allocate FIFO to any waiting PO items
+          const avail = Math.max(0, p.physicalStock - p.reservedStock);
+          if (avail > 0) {
+            await allocateStockToWaitingPreOrders(tx, p, avail);
+          }
+        }
+
+        // 3. Recalculate status for all non-cancelled preorders
+        const allPos = await tx.preOrder.findMany({
+          where: { status: { notIn: ['CANCELLED'] } },
+          include: { items: true },
+        });
+
+        for (const po of allPos) {
+          const totalOrdered = po.items.reduce((acc, it) => acc + it.quantityOrdered, 0);
+          const totalFulfilled = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
+          const totalShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
+
+          let correctStatus = 'WAITING_STOCK';
+          if (totalShipped >= totalOrdered && totalOrdered > 0) {
+            correctStatus = 'SHIPPED';
+          } else if (totalFulfilled >= totalOrdered && totalOrdered > 0) {
+            correctStatus = 'READY';
+          } else if (totalFulfilled > 0 || totalShipped > 0) {
+            correctStatus = totalShipped > 0 ? 'PARTIAL_SHIPPED' : 'PARTIAL_READY';
+          }
+
+          if (po.status !== correctStatus) {
+            await tx.preOrder.update({
+              where: { id: po.id },
+              data: { status: correctStatus },
+            });
+          }
+        }
+      },
+      { maxWait: 20000, timeout: 60000 }
+    );
+
+    revalidatePath('/pre-orders');
+    revalidatePath('/orders');
+    revalidatePath('/products');
+    revalidatePath('/stock-in');
+    revalidatePath('/');
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Error resyncing pre-order stock:', error);
+    return { success: false, error: error.message || 'Gagal menyinkronkan stok Pre-Order' };
   }
 }
 
