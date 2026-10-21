@@ -324,7 +324,7 @@ export async function shipPreOrderItems(
         if (isAllFullyShipped) {
           nextStatus = 'SHIPPED';
         } else if (hasSomeShipped) {
-          nextStatus = isAllReady ? 'READY' : 'PARTIAL_READY';
+          nextStatus = 'PARTIAL_SHIPPED';
         } else if (isAllReady) {
           nextStatus = 'READY';
         } else if (hasSomeFulfilled) {
@@ -372,7 +372,7 @@ export async function shipPreOrderItems(
 }
 
 // 4. Mark Pre-Order as Paid (Tandai Lunas & Catat Pemasukan ke Laporan Keuangan)
-export async function markPreOrderAsPaid(poId: string, paymentNotes?: string) {
+export async function markPreOrderAsPaid(poId: string, paymentNotes?: string, customAmount?: number) {
   try {
     const po = await prisma.preOrder.findUnique({
       where: { id: poId },
@@ -390,6 +390,11 @@ export async function markPreOrderAsPaid(poId: string, paymentNotes?: string) {
       return { success: false, error: 'Pre-Order ini sudah dalam status Lunas.' };
     }
 
+    const payAmount =
+      customAmount !== undefined && customAmount > 0
+        ? Math.floor(customAmount)
+        : Math.max(0, Math.floor(po.totalAmount));
+
     await prisma.$transaction(
       async (tx) => {
         // 1. Update PreOrder payment status
@@ -406,8 +411,8 @@ export async function markPreOrderAsPaid(poId: string, paymentNotes?: string) {
           data: {
             type: 'INCOME',
             category: 'SALES',
-            amount: Math.max(0, Math.floor(po.totalAmount)),
-            description: `Pembayaran Lunas Pre-Order #${po.poNumber} (${po.customerName})${paymentNotes ? ` [${paymentNotes}]` : ''}`,
+            amount: payAmount,
+            description: `Pembayaran ${customAmount && customAmount < po.totalAmount ? 'Parsial ' : 'Lunas '}Pre-Order #${po.poNumber} (${po.customerName})${paymentNotes ? ` [${paymentNotes}]` : ''}`,
             referenceId: po.poNumber,
           },
         });

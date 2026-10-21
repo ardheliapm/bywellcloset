@@ -62,6 +62,7 @@ export default function PreOrdersClient({
     type: 'PAY',
     po: null,
   });
+  const [payAmountOption, setPayAmountOption] = useState<'FULL' | 'READY_ONLY'>('FULL');
   const [actionLoading, setActionLoading] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
 
@@ -207,7 +208,13 @@ export default function PreOrdersClient({
 
     try {
       if (confirmDialog.type === 'PAY') {
-        const res = await markPreOrderAsPaid(confirmDialog.po.id);
+        const readyNominal = confirmDialog.po.items.reduce(
+          (acc, it) => acc + it.price * Math.max(0, it.quantityFulfilled - it.quantityShipped),
+          0
+        );
+        const customAmount =
+          payAmountOption === 'READY_ONLY' && readyNominal > 0 ? readyNominal : undefined;
+        const res = await markPreOrderAsPaid(confirmDialog.po.id, undefined, customAmount);
         if (!res.success) {
           alert(res.error || 'Gagal menandai Pre-Order lunas.');
         }
@@ -522,10 +529,22 @@ export default function PreOrdersClient({
                               <Clock className="w-3 h-3" /> Menunggu Barang
                             </span>
                           )}
-                          {(po.status === 'PARTIAL_READY' || po.status === 'PARTIAL_SHIPPED') && (
+                          {po.status === 'PARTIAL_READY' && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
                               <Layers className="w-3 h-3" /> Sebagian Ready ({readyToShipPcs} pcs)
                             </span>
+                          )}
+                          {po.status === 'PARTIAL_SHIPPED' && (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                                <Truck className="w-3 h-3 text-sky-600" /> Terkirim ({totalPcsShipped}/{totalPcsOrdered} pcs)
+                              </span>
+                              {readyToShipPcs > 0 && (
+                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                                  +{readyToShipPcs} pcs ready
+                                </span>
+                              )}
+                            </div>
                           )}
                           {po.status === 'READY' && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -599,16 +618,19 @@ export default function PreOrdersClient({
                           {!isPaid && po.status !== 'CANCELLED' && (
                             <button
                               type="button"
-                              onClick={() => setConfirmDialog({ isOpen: true, type: 'PAY', po })}
+                              onClick={() => {
+                                setPayAmountOption('FULL');
+                                setConfirmDialog({ isOpen: true, type: 'PAY', po });
+                              }}
                               className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
-                              title="Tandai Pre-Order ini telah dibayar (Lunas) & catat pemasukan keuangan"
+                              title="Tandai Pre-Order ini telah dibayar & catat pemasukan keuangan"
                             >
                               <CheckCircle2 className="w-3.5 h-3.5" /> Bayar
                             </button>
                           )}
 
-                          {/* Kirim Barang Ready */}
-                          {readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
+                          {/* Kirim Barang Ready (HANYA MUNCUL JIKA SUDAH BAYAR / LUNAS) */}
+                          {isPaid && readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
                             <button
                               type="button"
                               onClick={() => setSelectedPoForShip(po)}
@@ -721,23 +743,85 @@ export default function PreOrdersClient({
 
               <div className="text-sm text-slate-500">
                 {confirmDialog.type === 'PAY' ? (
-                  <div className="space-y-2 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">No. PO:</span>
-                      <strong className="text-indigo-900 font-mono">#{confirmDialog.po.poNumber}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Customer:</span>
-                      <strong className="text-slate-800">{confirmDialog.po.customerName}</strong>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Total Tagihan:</span>
-                      <strong className="text-emerald-700 font-bold">{formatRupiah(confirmDialog.po.totalAmount)}</strong>
-                    </div>
-                    <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-200">
-                      Tandai PO ini telah dibayar (Lunas). Pemasukan otomatis tercatat di Laporan Keuangan.
-                    </p>
-                  </div>
+                  (() => {
+                    const readyPcs = confirmDialog.po.items.reduce(
+                      (acc, it) => acc + Math.max(0, it.quantityFulfilled - it.quantityShipped),
+                      0
+                    );
+                    const totalOrderedPcs = confirmDialog.po.items.reduce(
+                      (acc, it) => acc + it.quantityOrdered,
+                      0
+                    );
+                    const readyNominal = confirmDialog.po.items.reduce(
+                      (acc, it) => acc + it.price * Math.max(0, it.quantityFulfilled - it.quantityShipped),
+                      0
+                    );
+                    const isPartialAvailable = readyPcs > 0 && readyPcs < totalOrderedPcs;
+
+                    return (
+                      <div className="space-y-3 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">No. PO:</span>
+                          <strong className="text-indigo-900 font-mono">#{confirmDialog.po.poNumber}</strong>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Customer:</span>
+                          <strong className="text-slate-800">{confirmDialog.po.customerName}</strong>
+                        </div>
+
+                        {isPartialAvailable ? (
+                          <div className="space-y-2 pt-2 border-t border-slate-200">
+                            <label className="font-bold text-slate-700 block">
+                              Pilih Nominal Pembayaran:
+                            </label>
+                            <label className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors ${payAmountOption === 'READY_ONLY' ? 'bg-indigo-50/70 border-indigo-300' : 'bg-white border-slate-200'}`}>
+                              <input
+                                type="radio"
+                                name="payOption"
+                                checked={payAmountOption === 'READY_ONLY'}
+                                onChange={() => setPayAmountOption('READY_ONLY')}
+                                className="mt-0.5"
+                              />
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  Bayar Parsial Barang Ready Saja: <span className="text-indigo-700">{formatRupiah(readyNominal)}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  Hanya {readyPcs} pcs barang yang sudah siap dikirim.
+                                </div>
+                              </div>
+                            </label>
+                            <label className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors ${payAmountOption === 'FULL' ? 'bg-emerald-50/70 border-emerald-300' : 'bg-white border-slate-200'}`}>
+                              <input
+                                type="radio"
+                                name="payOption"
+                                checked={payAmountOption === 'FULL'}
+                                onChange={() => setPayAmountOption('FULL')}
+                                className="mt-0.5"
+                              />
+                              <div>
+                                <div className="font-bold text-slate-900">
+                                  Bayar Penuh Seluruh PO: <span className="text-emerald-700">{formatRupiah(confirmDialog.po.totalAmount)}</span>
+                                </div>
+                                <div className="text-[11px] text-slate-500">
+                                  Total semua pesanan ({totalOrderedPcs} pcs).
+                                </div>
+                              </div>
+                            </label>
+                          </div>
+                        ) : (
+                          <div className="flex justify-between border-t border-slate-200 pt-2">
+                            <span className="text-slate-500">Total Tagihan:</span>
+                            <strong className="text-emerald-700 font-bold">{formatRupiah(confirmDialog.po.totalAmount)}</strong>
+                          </div>
+                        )}
+
+                        <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-200">
+                          Tandai PO ini telah dibayar. Pemasukan otomatis tercatat di Laporan Keuangan, dan tombol Kirim akan aktif.
+                        </p>
+                      </div>
+                    );
+                  })()
                 ) : confirmDialog.type === 'CANCEL' ? (
                   <p>
                     Yakin ingin membatalkan Pre-Order <strong>#{confirmDialog.po.poNumber}</strong> ({confirmDialog.po.customerName})? Jika ada stok yang sudah ditahan untuk PO ini, stok tersebut akan otomatis dilepaskan kembali ke gudang.

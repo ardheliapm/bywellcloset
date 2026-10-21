@@ -820,9 +820,14 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                                 <Clock className="w-3 h-3" /> Menunggu Barang PO
                               </span>
                             )}
-                            {(order.status === 'PARTIAL_READY' || order.status === 'PARTIAL_SHIPPED') && (
+                            {order.status === 'PARTIAL_READY' && (
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-violet-50 text-violet-700 border border-violet-200">
                                 <Layers className="w-3 h-3" /> PO: Sebagian Ready ({poReadyPcs} pcs)
+                              </span>
+                            )}
+                            {order.status === 'PARTIAL_SHIPPED' && (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                                <Truck className="w-3 h-3 text-sky-600" /> PO: Terkirim Sebagian ({poReadyPcs > 0 ? `+${poReadyPcs} ready` : ''})
                               </span>
                             )}
                             {order.status === 'READY' && (
@@ -898,8 +903,8 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             </button>
                           )}
 
-                          {/* Pre-Order Specific Actions: Ship */}
-                          {isPo && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
+                          {/* Pre-Order Specific Actions: Ship (Hanya jika SUDAH LUNAS) */}
+                          {isPo && order.paymentStatus === 'PAID' && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
                             <button
                               type="button"
                               onClick={() => handleOpenPoShipment(order)}

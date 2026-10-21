@@ -35,6 +35,12 @@ interface InboundFormItem {
   productSku: string;
   productName: string;
   expectedQty: number;
+  baseCandidate?: {
+    baseCode: string;
+    suffixNum: string;
+    baseProd: ProductItem;
+  } | null;
+  confirmedAction?: 'MERGED' | 'DISTINCT' | null;
 }
 
 export default function CreateInboundModal({
@@ -224,18 +230,63 @@ BW83(20)`
         displayName = currentCategory !== 'MIX' ? `${currentCategory} - ${itemName}` : itemName;
       }
 
+      // Detect suffix like "12-2", "37-1", "PJ-12-2" when item is not yet in Master Data
+      let baseCandidate: InboundFormItem['baseCandidate'] = null;
+      if (!prod) {
+        const cleanSku = itemName.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
+        const suffixMatch = cleanSku.match(/^(.*?)[-_](\d+)$/);
+        if (suffixMatch) {
+          const baseCode = suffixMatch[1].trim();
+          const suffixNum = suffixMatch[2].trim();
+          if (baseCode) {
+            const baseProd = findProductMatch(baseCode, currentCategory);
+            if (baseProd) {
+              baseCandidate = {
+                baseCode,
+                suffixNum,
+                baseProd,
+              };
+            }
+          }
+        }
+      }
+
       parsed.push({
         id: `inbound-item-${Date.now()}-${idx}`,
         productId: prod ? prod.id : null,
         productSku: sku,
         productName: displayName,
         expectedQty: qty,
+        baseCandidate,
+        confirmedAction: null,
       });
     });
 
     if (parsed.length > 0) {
       setItems(parsed);
     }
+  };
+
+  const handleConfirmItemMerge = (index: number, baseProd: ProductItem) => {
+    const updated = [...items];
+    updated[index] = {
+      ...updated[index],
+      productId: baseProd.id,
+      productSku: baseProd.sku,
+      productName: baseProd.name,
+      confirmedAction: 'MERGED',
+    };
+    setItems(updated);
+  };
+
+  const handleConfirmItemDistinct = (index: number) => {
+    const updated = [...items];
+    updated[index] = {
+      ...updated[index],
+      productId: null,
+      confirmedAction: 'DISTINCT',
+    };
+    setItems(updated);
   };
 
   const handleAddItemRow = () => {
@@ -518,45 +569,88 @@ BW83(20)`
               </button>
             </div>
 
-            <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 overflow-hidden max-h-[280px] overflow-y-auto">
+            <div className="divide-y divide-slate-200 bg-white rounded-xl border border-slate-200 overflow-hidden max-h-[300px] overflow-y-auto">
               {items.map((it, idx) => (
-                <div key={it.id || idx} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/60 transition-colors">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className="font-mono font-bold text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-800 shrink-0">
-                      #{idx + 1}
-                    </span>
-                    <input
-                      type="text"
-                      value={it.productName}
-                      onChange={(e) => handleItemChange(idx, 'productName', e.target.value)}
-                      placeholder="Nama Motif / SKU"
-                      className="font-semibold text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded border border-transparent focus:border-slate-300 w-full"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-3 shrink-0">
-                    <div className="flex items-center gap-1">
-                      <span className="text-slate-400 text-[11px]">Qty:</span>
+                <div key={it.id || idx} className="p-3 space-y-1.5 text-xs hover:bg-slate-50/60 transition-colors">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <span className="font-mono font-bold text-[11px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-800 shrink-0">
+                        #{idx + 1}
+                      </span>
                       <input
-                        type="number"
-                        min="1"
-                        value={it.expectedQty}
-                        onChange={(e) => handleItemChange(idx, 'expectedQty', Math.max(1, parseInt(e.target.value, 10) || 1))}
-                        className="w-16 px-2 py-1 rounded bg-slate-50 border border-slate-200 text-center font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500"
+                        type="text"
+                        value={it.productName}
+                        onChange={(e) => handleItemChange(idx, 'productName', e.target.value)}
+                        placeholder="Nama Motif / SKU"
+                        className="font-semibold text-slate-800 bg-transparent hover:bg-slate-50 focus:bg-white px-2 py-1 rounded border border-transparent focus:border-slate-300 w-full"
                       />
-                      <span className="text-slate-500 font-medium">pcs</span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveItemRow(idx)}
-                      disabled={items.length <= 1}
-                      className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors disabled:opacity-20 cursor-pointer"
-                      title="Hapus baris"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex items-center gap-1">
+                        <span className="text-slate-400 text-[11px]">Qty:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={it.expectedQty}
+                          onChange={(e) => handleItemChange(idx, 'expectedQty', Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          className="w-16 px-2 py-1 rounded bg-slate-50 border border-slate-200 text-center font-bold text-slate-900 focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <span className="text-slate-500 font-medium">pcs</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveItemRow(idx)}
+                        disabled={items.length <= 1}
+                        className="p-1 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors disabled:opacity-20 cursor-pointer"
+                        title="Hapus baris"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Suffix Confirmation Warning & Choices (e.g. 12-2 vs 12) */}
+                  {it.baseCandidate && !it.confirmedAction && (
+                    <div className="p-2 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>
+                          Kode <strong>{it.baseCandidate.baseCode}-{it.baseCandidate.suffixNum}</strong>: Ditemukan motif dasar <strong>{it.baseCandidate.baseProd.name}</strong> ({it.baseCandidate.baseProd.sku}).
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmItemMerge(idx, it.baseCandidate!.baseProd)}
+                          className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] cursor-pointer shadow-2xs"
+                          title="Gabungkan stok ke motif dasar (Roll/Batch)"
+                        >
+                          ✓ Sama (Roll/Batch {it.baseCandidate.baseProd.sku})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmItemDistinct(idx)}
+                          className="px-2 py-1 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-[10px] cursor-pointer shadow-2xs"
+                          title="Bukan roll/batch, catat sebagai motif baru tersendiri"
+                        >
+                          ✕ Beda Motif (Produk Baru)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {it.confirmedAction === 'MERGED' && (
+                    <div className="text-[11px] text-indigo-700 font-bold flex items-center gap-1 pl-1">
+                      <CheckCircle2 className="w-3 h-3 text-indigo-600" /> Digabungkan ke stok: {it.productSku}
+                    </div>
+                  )}
+                  {it.confirmedAction === 'DISTINCT' && (
+                    <div className="text-[11px] text-amber-800 font-bold flex items-center gap-1 pl-1">
+                      <CheckCircle2 className="w-3 h-3 text-amber-600" /> Dicatat sebagai motif tersendiri (Beda motif)
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
