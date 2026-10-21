@@ -378,3 +378,118 @@ export async function deleteProduct(id: string) {
     return { success: false, error: error.message || 'Gagal menghapus produk' };
   }
 }
+
+export interface ProductReservationItem {
+  id: string;
+  type: 'REGULAR_ORDER' | 'PRE_ORDER';
+  referenceNumber: string;
+  customerName: string;
+  customerPhone: string | null;
+  reservedQuantity: number;
+  status: string;
+  paymentStatus: string;
+  orderDate: Date;
+}
+
+export async function getProductReservations(productId: string): Promise<ProductReservationItem[]> {
+  try {
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      select: { id: true, sku: true, name: true, motif: true },
+    });
+
+    if (!product) return [];
+
+    const cleanSku = product.sku?.trim().toUpperCase();
+    const cleanMotif = product.motif?.trim().toUpperCase();
+
+    // 1. Regular Orders in HOLD status
+    const regularItems = await prisma.orderItem.findMany({
+      where: {
+        productId: productId,
+        order: {
+          status: 'HOLD',
+        },
+      },
+      include: {
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            customerName: true,
+            customerPhone: true,
+            status: true,
+            createdAt: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const regularReservations: ProductReservationItem[] = regularItems
+      .filter((it) => it.quantity > 0 && it.order)
+      .map((it) => ({
+        id: it.id,
+        type: 'REGULAR_ORDER',
+        referenceNumber: it.order.orderNumber,
+        customerName: it.order.customerName,
+        customerPhone: it.order.customerPhone,
+        reservedQuantity: it.quantity,
+        status: it.order.status,
+        paymentStatus: 'UNPAID',
+        orderDate: it.order.createdAt,
+      }));
+
+    // 2. Pre-Orders with fulfilled stock not yet shipped
+    const skuConditions: any[] = [{ productId: productId }];
+    if (cleanSku) skuConditions.push({ productSku: { equals: cleanSku, mode: 'insensitive' } });
+    if (cleanMotif) skuConditions.push({ productSku: { equals: cleanMotif, mode: 'insensitive' } });
+
+    const poItems = await prisma.preOrderItem.findMany({
+      where: {
+        OR: skuConditions,
+        preOrder: {
+          status: { notIn: ['CANCELLED', 'SHIPPED'] },
+        },
+      },
+      include: {
+        preOrder: {
+          select: {
+            id: true,
+            poNumber: true,
+            customerName: true,
+            customerPhone: true,
+            status: true,
+            paymentStatus: true,
+            createdAt: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const poReservations: ProductReservationItem[] = poItems
+      .filter((it) => it.preOrder && (it.quantityFulfilled - it.quantityShipped) > 0)
+      .map((it) => {
+        const heldQty = it.quantityFulfilled - it.quantityShipped;
+        return {
+          id: it.id,
+          type: 'PRE_ORDER',
+          referenceNumber: it.preOrder.poNumber,
+          customerName: it.preOrder.customerName,
+          customerPhone: it.preOrder.customerPhone,
+          reservedQuantity: heldQty,
+          status: it.preOrder.status,
+          paymentStatus: it.preOrder.paymentStatus || 'UNPAID',
+          orderDate: it.preOrder.createdAt,
+        };
+      });
+
+    return [...regularReservations, ...poReservations].sort(
+      (a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime()
+    );
+  } catch (error) {
+    console.error('Error fetching product reservations:', error);
+    return [];
+  }
+}

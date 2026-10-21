@@ -2,11 +2,12 @@
 
 import React, { useState, useMemo, useEffect, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Download, Upload, FileSpreadsheet, Trash2, Layers, Edit3, Check, X, Loader2 } from 'lucide-react';
+import { Package, Plus, Search, Tag, CheckCircle2, XCircle, RefreshCw, AlertTriangle, Download, Upload, FileSpreadsheet, Trash2, Layers, Edit3, Check, X, Loader2, Users } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import AddProductModal from './AddProductModal';
 import ImportExcelModal from './ImportExcelModal';
 import ManageProductTypesModal from './ManageProductTypesModal';
+import ReservedStockModal from './ReservedStockModal';
 import { getStoredProductTypes, ProductMasterType, PRODUCT_TYPES_UPDATED_EVENT } from '@/lib/productTypes';
 import { ProductItem, toggleProductStatus, deleteProduct, updateProduct } from './actions';
 
@@ -40,6 +41,7 @@ export default function ProductList({ products }: ProductListProps) {
   const [productToDelete, setProductToDelete] = useState<ProductItem | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [selectedProductForReservations, setSelectedProductForReservations] = useState<ProductItem | null>(null);
 
   // Inline editing state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -705,9 +707,21 @@ export default function ProductList({ products }: ProductListProps) {
 
                       {/* Reserved Stock */}
                       <td className="py-3.5 px-4 text-center">
-                        <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 font-semibold text-xs border border-amber-200/60">
-                          {product.reservedStock}
-                        </span>
+                        {product.reservedStock > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedProductForReservations(product)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs border border-amber-300 shadow-2xs transition-all hover:scale-105 cursor-pointer group"
+                            title="Klik untuk melihat siapa saja yang menahan stok ini"
+                          >
+                            <Users className="w-3.5 h-3.5 text-amber-600 group-hover:text-amber-800" />
+                            <span>{product.reservedStock}</span>
+                          </button>
+                        ) : (
+                          <span className="text-slate-400 font-medium text-xs">
+                            0
+                          </span>
+                        )}
                       </td>
 
                       {/* Available Stock */}
@@ -929,6 +943,13 @@ export default function ProductList({ products }: ProductListProps) {
           </div>
         </div>
       )}
+
+      {/* Reserved Stock Details Modal */}
+      <ReservedStockModal
+        isOpen={Boolean(selectedProductForReservations)}
+        onClose={() => setSelectedProductForReservations(null)}
+        product={selectedProductForReservations}
+      />
     </div>
   );
 }
