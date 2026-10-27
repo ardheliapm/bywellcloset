@@ -94,6 +94,25 @@ function hasLetter(s: string): boolean {
   return /[A-Za-z]/.test(s);
 }
 
+/** Buang label kategori di depan teks: "BABY TRYSPAN - IRISH TULIP" -> "IRISH TULIP" */
+function stripCategoryLabel(text: string): string {
+  return trimDecoration(text).replace(CATEGORY_LABEL_RE, '').trim();
+}
+
+/**
+ * Kunci nama motif sebuah produk. Nama motif bisa tersimpan di kolom Motif, atau di kolom Nama
+ * (mis. Nama "IRISH TULIP" atau "BABY TRYSPAN - IRISH TULIP" dengan Motif kosong). Dua-duanya dipakai.
+ * Nama yang hanya berisi nama kategori ("BABY TRYSPAN") tidak dihitung.
+ */
+function labelKeys(p: MatchableProduct): string[] {
+  const keys = new Set<string>();
+  const fromMotif = textKey(p.motif);
+  if (fromMotif) keys.add(fromMotif);
+  const fromName = textKey(stripCategoryLabel(p.name));
+  if (fromName) keys.add(fromName);
+  return Array.from(keys);
+}
+
 function preferActive<P extends MatchableProduct>(list: P[]): P | null {
   return list.find((p) => p.isActive !== false) || list[0] || null;
 }
@@ -138,7 +157,7 @@ export function matchProduct<P extends MatchableProduct>(
   //    supaya angka seperti "12-2" tidak pernah dicocokkan lewat nama motif.
   if (hasLetter(code)) {
     const key = textKey(code);
-    const byMotif = sameCat.filter((p) => p.motif && textKey(p.motif) === key);
+    const byMotif = sameCat.filter((p) => labelKeys(p).includes(key));
     const motifHit = preferActive(byMotif);
     if (motifHit) return { product: motifHit, kind: 'motif' };
   }
@@ -218,21 +237,26 @@ export function suggestProducts<P extends MatchableProduct>(
       continue;
     }
 
-    // Nama motif yang mirip: salah ketik satu atau dua huruf
-    if (hasLetter(code) && p.motif) {
-      const mKey = textKey(p.motif);
-      if (mKey && codeKey && mKey !== codeKey) {
+    // Nama motif yang mirip: salah ketik satu atau dua huruf (dicek ke kolom Motif dan kolom Nama)
+    if (hasLetter(code)) {
+      let bestScore = 0;
+      for (const mKey of labelKeys(p)) {
+        if (!mKey || !codeKey || mKey === codeKey) continue;
         const dist = editDistance(codeKey, mKey);
         const longest = Math.max(codeKey.length, mKey.length);
         const sim = 1 - dist / longest;
         if (longest >= 5 && dist <= 2 && sim >= 0.8) {
-          offer(p, sim, `nama motif mirip: ${p.motif}`);
-          continue;
+          bestScore = Math.max(bestScore, sim);
+        } else if (
+          Math.min(codeKey.length, mKey.length) >= 5 &&
+          (mKey.includes(codeKey) || codeKey.includes(mKey))
+        ) {
+          bestScore = Math.max(bestScore, 0.75);
         }
-        if (longest >= 5 && (mKey.includes(codeKey) || codeKey.includes(mKey)) && Math.min(codeKey.length, mKey.length) >= 5) {
-          offer(p, 0.75, `nama motif mirip: ${p.motif}`);
-          continue;
-        }
+      }
+      if (bestScore > 0) {
+        offer(p, bestScore, `nama motif mirip: ${p.motif || stripCategoryLabel(p.name) || p.sku}`);
+        continue;
       }
     }
 

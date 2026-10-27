@@ -116,3 +116,32 @@ test('editDistance', () => {
   assert.equal(editDistance('abc', 'abc'), 0);
   assert.equal(editDistance('', 'abc'), 3);
 });
+
+test('nama motif yang tersimpan di kolom Nama (Motif kosong) tetap dikenali dan disarankan', () => {
+  const byName = [mk('BW76', 'IRISH TULIP'), mk('BW80', 'SPARK FLOWER')];
+  // cocok persis, dengan atau tanpa label kategori yang ditambahkan layar
+  assert.equal(skuOf(matchProduct(byName, '', 'IRISH TULIP')), 'BW76');
+  assert.equal(skuOf(matchProduct(byName, '', 'BABY TRYSPAN - IRISH TULIP')), 'BW76');
+  assert.equal(skuOf(matchProduct(byName, '', 'irish tulip')), 'BW76');
+  // salah ketik: tidak cocok otomatis, tetapi disarankan
+  for (const typed of ['IRISH TULIPS', 'IRISH TULLIPS', 'IRISH TULLIP']) {
+    assert.equal(matchProduct(byName, '', `BABY TRYSPAN - ${typed}`), null, typed);
+    const s = suggestProducts(byName, '', `BABY TRYSPAN - ${typed}`);
+    assert.equal(s[0]?.product.sku, 'BW76', `saran untuk ${typed}`);
+    assert.ok(!s.some((x) => x.product.sku === 'BW80'));
+  }
+});
+
+test('nama motif yang tersimpan sebagai "BABY TRYSPAN - IRISH TULIP" di kolom Nama', () => {
+  const combined = [mk('BW76', 'BABY TRYSPAN - IRISH TULIP'), mk('BW80', 'BABY TRYSPAN - SPARK FLOWER')];
+  assert.equal(skuOf(matchProduct(combined, '', 'BABY TRYSPAN - IRISH TULIP')), 'BW76');
+  assert.equal(skuOf(matchProduct(combined, '', 'IRISH TULIP')), 'BW76');
+  assert.equal(matchProduct(combined, '', 'BABY TRYSPAN - IRISH TULIPS'), null);
+  assert.equal(suggestProducts(combined, '', 'BABY TRYSPAN - IRISH TULIPS')[0]?.product.sku, 'BW76');
+});
+
+test('produk yang namanya hanya kategori tidak ikut dicocokkan atau disarankan', () => {
+  const junk = [mk('IRISH-TULIP', 'BABY TRYSPAN'), mk('BW80', 'BABY TRYSPAN', 'SPARK FLOWER')];
+  assert.equal(matchProduct(junk, '', 'BABY TRYSPAN - KOPI HITAM'), null);
+  assert.deepEqual(suggestProducts(junk, '', 'BABY TRYSPAN - KOPI HITAM'), []);
+});

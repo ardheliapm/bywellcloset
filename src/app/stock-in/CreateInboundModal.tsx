@@ -550,7 +550,11 @@ export default function CreateInboundModal({
                               </button>
                             ))}
                           </div>
-                        ) : null;
+                        ) : (
+                          <div className="pl-5 text-amber-800">
+                            Tidak ada produk yang mirip di Master. Cek ejaan, atau buat sebagai produk baru.
+                          </div>
+                        );
                       })()}
                       <div className="pl-5">
                         <button
