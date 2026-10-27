@@ -10,6 +10,7 @@ import {
   hasPinSession,
 } from '@/lib/auth';
 import { isAuthConfigured } from '@/lib/session';
+import { matchesRecoveryPin } from '@/lib/recoveryPin';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
@@ -25,6 +26,28 @@ export async function verifyPin(pinInput: string) {
         success: false,
         error: 'Pengaman login (AUTH_SECRET) belum diatur di server. Hubungi admin sistem.',
       };
+    }
+
+    // Jalur darurat: PIN dari environment variable RECOVERY_PIN (Vercel).
+    // Jika cocok, PIN admin di database diganti dengan PIN ini, lalu login berhasil.
+    if (matchesRecoveryPin(cleanPin)) {
+      const recoveryHash = hashPin(cleanPin);
+      await prisma.user.upsert({
+        where: { username: 'admin' },
+        update: { password: recoveryHash },
+        create: {
+          username: 'admin',
+          name: 'Admin Bywell Closet',
+          password: recoveryHash,
+          role: 'ADMIN',
+        },
+      });
+      const recoverySession = await setPinSessionCookie();
+      if (!recoverySession) {
+        return { success: false, error: 'Gagal membuat sesi login. Hubungi admin sistem.' };
+      }
+      revalidatePath('/');
+      return { success: true };
     }
 
     const currentHashed = await getStoredHashedPin();
