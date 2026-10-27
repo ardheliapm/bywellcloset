@@ -22,7 +22,7 @@ import { ProductItem } from '../products/actions';
 import { createInboundShipment } from './inboundActions';
 import SearchableProductSelect from '@/components/SearchableProductSelect';
 import { parseInboundText } from '@/lib/inboundTextParser';
-import { extractCode, matchProduct, suggestProducts } from '@/lib/productMatching';
+import { extractCode, humanCode, matchProduct, suggestProducts } from '@/lib/productMatching';
 
 const CATEGORY_WORDS = /\b(paris|jepang|japan|bella|tryspan)\b/i;
 
@@ -118,7 +118,7 @@ export default function CreateInboundModal({
   const resolveByText = (itemName: string, category: string) => {
     const rawName = buildRawName(itemName, category);
     const product = matchProduct(products, '', rawName)?.product ?? null;
-    return { rawName, product, code: extractCode('', rawName) };
+    return { rawName, product, code: humanCode(extractCode('', rawName)) };
   };
 
   // Parser untuk Copas WhatsApp / Teks / Surat Jalan
