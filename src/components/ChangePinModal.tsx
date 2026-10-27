@@ -96,7 +96,7 @@ export default function ChangePinModal({ isOpen, onClose }: ChangePinModalProps)
               {/* PIN Lama */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  PIN Lama Saat Ini (Default: 123456)
+                  PIN Lama Saat Ini
                 </label>
                 <input
                   type="password"
