@@ -22,7 +22,7 @@ export function comparePin(pin: string, hashed: string): boolean {
 
 /** Pasang cookie sesi (30 hari). Mengembalikan false jika AUTH_SECRET belum diatur. */
 export async function setPinSessionCookie(): Promise<boolean> {
-  const token = await createSessionToken();
+  const token = await createSessionToken('pin');
   if (!token) return false;
 
   const cookieStore = await cookies();
@@ -43,7 +43,7 @@ export async function clearPinSessionCookie() {
 
 export async function hasPinSession(): Promise<boolean> {
   const cookieStore = await cookies();
-  return verifySessionToken(cookieStore.get(PIN_COOKIE_NAME)?.value);
+  return verifySessionToken(cookieStore.get(PIN_COOKIE_NAME)?.value, 'pin');
 }
 
 /**
