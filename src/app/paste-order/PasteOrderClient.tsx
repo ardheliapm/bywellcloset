@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { ProductMatchInfo, createOrder } from './actions';
 import InvoiceModal from '../orders/InvoiceModal';
+import { parseInboundLine } from '@/lib/inboundTextParser';
+import { matchProduct } from '@/lib/productMatching';
 import {
   ProductMasterType,
   getStoredProductTypes,
@@ -97,13 +99,11 @@ BW76(3)`
     if (!q) return null;
     const cleanQ = q.replace(/[^a-z0-9]/g, '');
 
-    // 1. Exact SKU match (e.g. "BW83", "bw-83", "BW 83")
-    const exactSku = products.find(
-      (p) =>
-        p.sku.toLowerCase() === q ||
-        (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
-    );
-    if (exactSku) return exactSku;
+    // 1. Kode persis, lewat aturan bersama: "12", "12-2", dan "122" adalah kode yang berbeda;
+    //    awalan PJ-/BW- dst boleh ada atau tidak. Dicoba sebagai kode dulu, lalu sebagai teks nama.
+    const exactCode =
+      matchProduct(products, query, '')?.product ?? matchProduct(products, '', query)?.product ?? null;
+    if (exactCode) return exactCode;
 
     // 2. Exact Motif match (e.g. "spark flower", "blush peony")
     const exactMotif = products.find(
@@ -128,7 +128,7 @@ BW76(3)`
     if (cleanQ.length >= 3) {
       const prefixSku = products.find((p) => {
         const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
-        return pCleanSku === cleanQ || (pCleanSku.startsWith(cleanQ) && cleanQ.length >= 4);
+        return pCleanSku.startsWith(cleanQ) && cleanQ.length >= 4;
       });
       if (prefixSku) return prefixSku;
     }
@@ -287,26 +287,11 @@ BW76(3)`
     }>();
 
     itemLines.forEach((line) => {
-      let itemName = line;
-      let qty = 1;
-
-      const p1 = line.match(/^(.*?)\((\d+)\)\s*$/);
-      const p2 = line.match(/^(.*?)\s*[-xX:]\s*(\d+)\s*$/);
-      const p3 = line.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj)?$/i);
-
-      if (p1) {
-        itemName = p1[1].trim();
-        qty = parseInt(p1[2], 10) || 1;
-      } else if (p2) {
-        itemName = p2[1].trim();
-        qty = parseInt(p2[2], 10) || 1;
-      } else if (p3) {
-        itemName = p3[1].trim();
-        qty = parseInt(p3[2], 10) || 1;
-      }
-
-      itemName = itemName.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
-      if (!itemName) return;
+      // Pembaca baris bersama: tanda "-" di dalam kode ("12-2") tidak lagi dianggap pemisah jumlah
+      const parsedLine = parseInboundLine(line);
+      if (!parsedLine) return;
+      const itemName = parsedLine.name;
+      const qty = parsedLine.qty;
 
       const matched = findBestProductMatch(itemName);
       const sku = matched ? matched.sku : itemName.toUpperCase();

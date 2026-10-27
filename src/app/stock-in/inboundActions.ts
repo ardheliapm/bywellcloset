@@ -7,13 +7,19 @@ import {
   allocateStockToWaitingPreOrders,
   allocateStockToWaitingPreOrdersBatch,
 } from '@/lib/preOrderFulfillment';
-import { resolveOrCreateInboundProduct } from '@/lib/inboundProductMatcher';
+import {
+  buildNewProductDraft,
+  createProductFromDraft,
+  findInboundProductMatch,
+} from '@/lib/inboundProductMatcher';
 
 export interface InboundItemInput {
   productId?: string | null;
   productSku: string;
   productName: string;
   expectedQty: number;
+  /** Pengguna sudah mengonfirmasi: buat produk baru di Master untuk kode ini (bila belum ada). */
+  createNew?: boolean;
 }
 
 export interface CreateInboundShipmentPayload {
@@ -127,6 +133,7 @@ export async function createInboundShipment(payload: CreateInboundShipmentPayloa
         productSku: (it.productSku || it.productName || 'SKU-IN').trim().toUpperCase(),
         productName: (it.productName || it.productSku || 'Produk Kiriman').trim(),
         expectedQty: Math.max(1, Math.floor(Number(it.expectedQty) || 1)),
+        createNew: !!it.createNew,
       }));
 
     if (cleanItems.length === 0) {
@@ -143,28 +150,63 @@ export async function createInboundShipment(payload: CreateInboundShipmentPayloa
       return { success: false, error: `Nomor Invoice/SJ "${invoiceNumber}" sudah pernah dicatat sebelumnya.` };
     }
 
-    const newShipment = await prisma.inboundShipment.create({
-      data: {
-        invoiceNumber: invoiceNumber.trim().toUpperCase(),
-        supplierName: (supplierName || 'Konveksi / Gudang').trim(),
-        status: 'ON_DELIVERY',
-        totalExpectedPcs,
-        totalReceivedPcs: 0,
-        expectedDate: expectedDate ? new Date(expectedDate) : null,
-        attachmentUrl: attachmentUrl || null,
-        attachmentType: attachmentType || null,
-        notes: notes ? notes.trim() : null,
-        items: {
-          create: cleanItems.map((it) => ({
-            productId: it.productId,
+    // Hubungkan tiap barang ke produk di Master. Kode dicocokkan PERSIS; kode yang belum ada hanya
+    // dibuatkan produk baru kalau pengguna sudah mengonfirmasinya (createNew). Tidak ada tebakan otomatis.
+    const allProducts = await prisma.product.findMany();
+    const unresolved: string[] = [];
+    for (const it of cleanItems) {
+      const linked = it.productId ? allProducts.find((p) => p.id === it.productId) : undefined;
+      if (linked) continue;
+      const hit = findInboundProductMatch(allProducts, it.productSku, it.productName);
+      if (hit) continue;
+      if (it.createNew && buildNewProductDraft(it.productSku, it.productName)) continue;
+      unresolved.push(it.productName || it.productSku);
+    }
+
+    if (unresolved.length > 0) {
+      return {
+        success: false,
+        error: `Kode berikut belum ada di Master Produk: ${unresolved.join(', ')}. Pilih produk yang sesuai, atau tekan "Buat produk baru" untuk tiap kode.`,
+      };
+    }
+
+    const newShipment = await prisma.$transaction(
+      async (tx) => {
+        const itemsToCreate = [];
+        for (const it of cleanItems) {
+          let product = it.productId ? allProducts.find((p) => p.id === it.productId) : undefined;
+          if (!product) product = findInboundProductMatch(allProducts, it.productSku, it.productName) ?? undefined;
+          if (!product) {
+            const draft = buildNewProductDraft(it.productSku, it.productName);
+            if (!draft) throw new Error(`Kode "${it.productName || it.productSku}" tidak dapat dikenali.`);
+            product = (await createProductFromDraft(tx, allProducts, draft)).product;
+          }
+          itemsToCreate.push({
+            productId: product.id,
             productSku: it.productSku,
             productName: it.productName,
             expectedQty: it.expectedQty,
             receivedQty: 0,
-          })),
-        },
+          });
+        }
+
+        return tx.inboundShipment.create({
+          data: {
+            invoiceNumber: invoiceNumber.trim().toUpperCase(),
+            supplierName: (supplierName || 'Konveksi / Gudang').trim(),
+            status: 'ON_DELIVERY',
+            totalExpectedPcs,
+            totalReceivedPcs: 0,
+            expectedDate: expectedDate ? new Date(expectedDate) : null,
+            attachmentUrl: attachmentUrl || null,
+            attachmentType: attachmentType || null,
+            notes: notes ? notes.trim() : null,
+            items: { create: itemsToCreate },
+          },
+        });
       },
-    });
+      { maxWait: 10000, timeout: 30000 },
+    );
 
     revalidatePath('/stock-in');
     return { success: true, id: newShipment.id, invoiceNumber: newShipment.invoiceNumber };
@@ -199,6 +241,37 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
     // Include inactive products too, so we never create a duplicate SKU (unique constraint)
     const allProducts = await prisma.product.findMany();
 
+    // Tentukan produk tiap barang SEBELUM mengubah apa pun. Barang yang tidak jelas produknya
+    // menghentikan proses (tidak ada produk yang dibuat diam-diam, stok tidak nyasar).
+    const resolvedByItemId = new Map<string, Product>();
+    const unresolvedNames: string[] = [];
+    for (const itemAudit of items) {
+      const itemRecord = shipment.items.find((i) => i.id === itemAudit.itemId);
+      if (!itemRecord) continue;
+      const qty = Math.max(0, Math.floor(Number(itemAudit.receivedQty) || 0));
+      if (qty <= 0) continue;
+
+      const linkedId = itemRecord.productId || itemAudit.productId || null;
+      let prod = linkedId ? allProducts.find((p) => p.id === linkedId) : undefined;
+      if (!prod) {
+        prod =
+          findInboundProductMatch(
+            allProducts,
+            (itemRecord.productSku || '').trim(),
+            (itemRecord.productName || '').trim()
+          ) ?? undefined;
+      }
+      if (prod) resolvedByItemId.set(itemRecord.id, prod);
+      else unresolvedNames.push(itemRecord.productName || itemRecord.productSku);
+    }
+
+    if (unresolvedNames.length > 0) {
+      return {
+        success: false,
+        error: `Barang berikut belum terhubung ke produk di Master: ${unresolvedNames.join(', ')}. Hapus Surat Jalan ini lalu catat ulang agar kodenya bisa dikonfirmasi.`,
+      };
+    }
+
     let totalActualReceivedPcs = 0;
     const poFulfillmentNotes: string[] = [];
 
@@ -220,16 +293,10 @@ export async function receiveInboundShipment(payload: ReceiveInboundPayload) {
           totalActualReceivedPcs += receivedQty;
 
           if (receivedQty > 0) {
-            const rawSku = (itemRecord.productSku || '').trim();
-            const rawName = (itemRecord.productName || '').trim();
+            let matchedProd = resolvedByItemId.get(itemRecord.id) as Product;
 
-            let matchedProd = itemRecord.productId
-              ? allProducts.find((p) => p.id === itemRecord.productId)
-              : undefined;
-
-            if (!matchedProd) {
-              const resolved = await resolveOrCreateInboundProduct(tx, allProducts, rawSku, rawName);
-              matchedProd = resolved.product;
+            if (!matchedProd.isActive) {
+              matchedProd = await tx.product.update({ where: { id: matchedProd.id }, data: { isActive: true } });
             }
 
             // 1. Update InboundShipmentItem record once with linked productId and receivedQty
