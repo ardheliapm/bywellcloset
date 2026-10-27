@@ -1,4 +1,5 @@
-import { Prisma } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+import { matchProduct } from './productMatching';
 
 type TransactionClient = Prisma.TransactionClient;
 
@@ -19,84 +20,20 @@ export interface ItemReference {
 }
 
 /**
- * Strict, accurate matching between a product and a PO item.
- * Handles prefix variations (e.g. "PJ-88" matches SKU "88" in Paris Japan).
+ * Mencocokkan item Pre-Order dengan sebuah produk.
+ * - Item yang sudah terhubung (productId) HARUS sama dengan produk tersebut.
+ * - Item tanpa productId dicocokkan lewat aturan bersama di productMatching.ts: kode dicocokkan
+ *   PERSIS ("12", "12-2", dan "122" berbeda), awalan PJ-/BT-/BS-/BW- boleh ada atau tidak.
+ *   Salah ketik tidak dicocokkan otomatis.
  */
 export function isProductMatchItem(
   product: { id: string; sku: string; name: string; motif?: string | null },
   item: ItemReference
 ): boolean {
-  // If item already has a linked productId, it MUST match product.id
   if (item.productId) {
     return item.productId === product.id;
   }
-
-  const pSku = (product.sku || '').trim().toLowerCase();
-  const pCleanSku = pSku.replace(/[^a-z0-9]/g, '');
-
-  const itSku = (item.productSku || '').trim().toLowerCase();
-  const itCleanSku = itSku.replace(/[^a-z0-9]/g, '');
-
-  const itName = (item.productName || '').trim().toLowerCase();
-  const pName = (product.name || '').trim().toLowerCase();
-  const pMotif = (product.motif || '').trim().toLowerCase();
-
-  // 1. Exact SKU match (case-insensitive, e.g. "118W" === "118w")
-  if (itSku && pSku && itSku === pSku) return true;
-
-  // 2. Clean alphanumeric SKU exact match (e.g. "BW-118" === "bw118" or "118w" === "118w")
-  if (itCleanSku && pCleanSku && itCleanSku === pCleanSku) return true;
-
-  // 3. Category prefix stripped match (e.g. "PJ-88" or "PJ 88" matches "88", "BT-152" matches "152")
-  const pCode = pSku.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
-  const itCode = itSku.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
-  if (pCode && itCode && pCode === itCode) {
-    const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
-    const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
-    const isProductBella = pName.includes('bella') || pSku.startsWith('bs');
-    const isItemBella = itName.includes('bella') || itSku.startsWith('bs');
-
-    if (isProductParis && isItemParis) return true;
-    if (isProductBella && isItemBella) return true;
-    if (!isProductParis && !isProductBella && !isItemParis && !isItemBella) return true;
-  }
-
-  // 3b. Suffix roll/batch variation (e.g. "37-1", "37-2", "PJ-37-1" matches "37", "PJ-37")
-  const pBaseCode = pCode.replace(/[-_]\d+$/, '').trim();
-  const itBaseCode = itCode.replace(/[-_]\d+$/, '').trim();
-  if ((itBaseCode === pCode || itCode === pBaseCode || (itBaseCode && itBaseCode === pBaseCode)) && (itBaseCode || pBaseCode)) {
-    const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
-    const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
-    const isProductBella = pName.includes('bella') || pSku.startsWith('bs');
-    const isItemBella = itName.includes('bella') || itSku.startsWith('bs');
-    if (isProductParis && isItemParis) return true;
-    if (isProductBella && isItemBella) return true;
-    if (!isProductParis && !isProductBella && !isItemParis && !isItemBella) return true;
-  }
-
-  // 4. Extract motif from item name (e.g. "PARIS JAPAN - 88" -> motif "88")
-  if (itName.includes('-')) {
-    const extractedMotif = itName.split('-').slice(1).join('-').trim().toLowerCase();
-    if (extractedMotif && (extractedMotif === pSku || extractedMotif === pCode || extractedMotif === pMotif)) {
-      const isProductParis = pName.includes('paris') || pSku.startsWith('pj');
-      const isItemParis = itName.includes('paris') || itSku.startsWith('pj');
-      if (isProductParis === isItemParis) return true;
-    }
-  }
-
-  // 5. Exact Motif match (e.g. "SPARK FLOWER" === "SPARK FLOWER")
-  if (pMotif && (itSku === pMotif || itName === pMotif || itCode === pMotif)) return true;
-
-  // 6. Exact combined name & motif (e.g. "BABY TRYSPAN - SPARK FLOWER")
-  const pFullName = `${product.name} ${product.motif || ''}`.trim().toLowerCase();
-  const pFullWithDash = `${product.name} - ${product.motif || ''}`.trim().toLowerCase();
-  if (itName === pFullName || itName === pFullWithDash) return true;
-
-  // 7. If item SKU or Name is an exact match for product SKU + motif
-  const pSkuMotif = `${product.sku} ${product.motif || ''}`.trim().toLowerCase();
-  if (pSkuMotif && (itName === pSkuMotif || itSku === pSkuMotif)) return true;
-
-  return false;
+  return matchProduct([product], item.productSku || '', item.productName || '') !== null;
 }
 
 /**

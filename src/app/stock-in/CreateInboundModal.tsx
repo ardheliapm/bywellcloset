@@ -21,6 +21,10 @@ import {
 import { ProductItem } from '../products/actions';
 import { createInboundShipment } from './inboundActions';
 import SearchableProductSelect from '@/components/SearchableProductSelect';
+import { parseInboundText } from '@/lib/inboundTextParser';
+import { extractCode, matchProduct, suggestProducts } from '@/lib/productMatching';
+
+const CATEGORY_WORDS = /\b(paris|jepang|japan|bella|tryspan)\b/i;
 
 interface CreateInboundModalProps {
   isOpen: boolean;
@@ -35,12 +39,10 @@ interface InboundFormItem {
   productSku: string;
   productName: string;
   expectedQty: number;
-  baseCandidate?: {
-    baseCode: string;
-    suffixNum: string;
-    baseProd: ProductItem;
-  } | null;
-  confirmedAction?: 'MERGED' | 'DISTINCT' | null;
+  /** false = jumlah tidak tertulis di teks yang ditempel, dipakai nilai bawaan 1 */
+  qtyGiven?: boolean;
+  /** Pengguna menekan "Buat produk baru" untuk kode yang belum ada di Master */
+  createNew?: boolean;
 }
 
 export default function CreateInboundModal({
@@ -61,12 +63,7 @@ export default function CreateInboundModal({
   const [notes, setNotes] = useState('');
 
   // Paste text state
-  const [rawText, setRawText] = useState(
-`152(50)
-123(30)
-SPARK FLOWER(40)
-BW83(20)`
-  );
+  const [rawText, setRawText] = useState('');
 
   const [items, setItems] = useState<InboundFormItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,198 +91,75 @@ BW83(20)`
       setSuccessMsg(null);
       setNotes('');
 
-      // Auto-parse default text
-      parseTextToItems(rawText, invoiceCategory);
+      // Mulai dari kosong setiap kali dibuka, supaya data contoh atau sisa catatan sebelumnya
+      // tidak ikut tersimpan sebagai barang kiriman.
+      setRawText('');
+      setItems([]);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const totalExpectedPcs = items.reduce((acc, it) => acc + (Number(it.expectedQty) || 0), 0);
+  const unresolvedCount = items.filter(
+    (it) => (it.productSku?.trim() || it.productName?.trim()) && !it.productId && !it.createNew
+  ).length;
 
-  // Product Matching Helper (Aware of selected invoice category)
-  const findProductMatch = (query: string, preferredCategory: string): ProductItem | null => {
-    const q = query.toLowerCase().trim();
-    if (!q) return null;
-    const cleanQ = q.replace(/[^a-z0-9]/g, '');
-
-    // Filter products pool if specific category is selected
-    const candidatePool =
-      preferredCategory !== 'MIX'
-        ? products.filter((p) => {
-            const cat = preferredCategory.toLowerCase();
-            return (
-              p.name.toLowerCase().includes(cat) ||
-              (cat.includes('paris') && p.name.toLowerCase().includes('paris')) ||
-              (cat.includes('tryspan') && p.name.toLowerCase().includes('tryspan')) ||
-              (cat.includes('bella') && p.name.toLowerCase().includes('bella'))
-            );
-          })
-        : products;
-
-    const searchPool = candidatePool.length > 0 ? candidatePool : products;
-
-    // 1. Exact SKU match
-    const exactSku = searchPool.find(
-      (p) =>
-        p.sku.toLowerCase() === q ||
-        (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
-    );
-    if (exactSku) return exactSku;
-
-    // 2. Exact Motif match
-    const exactMotif = searchPool.find(
-      (p) => p.motif && p.motif.toLowerCase().trim() === q
-    );
-    if (exactMotif) return exactMotif;
-
-    // 3. Exact Full Name match
-    const exactName = searchPool.find((p) => p.name.toLowerCase().trim() === q);
-    if (exactName) return exactName;
-
-    // 4. Combined Name & Motif
-    const exactCombined = searchPool.find((p) => {
-      const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
-      return full === q;
-    });
-    if (exactCombined) return exactCombined;
-
-    return null;
+  // Susun teks menjadi nama lengkap untuk pencocokan, mis. kategori "PARIS JAPAN" + "12-2"
+  const buildRawName = (itemName: string, category: string): string => {
+    if (category === 'MIX' || CATEGORY_WORDS.test(itemName)) return itemName;
+    return `${category} - ${itemName}`;
   };
 
-  // Parser for Copas WhatsApp / Text / Surat Jalan
+  const displayNameFor = (prod: ProductItem) =>
+    `${prod.name} - ${prod.motif ? prod.motif : prod.sku}`;
+
+  // Cocokkan teks dengan produk di Master. Kode dicocokkan PERSIS; salah ketik hanya jadi saran.
+  const resolveByText = (itemName: string, category: string) => {
+    const rawName = buildRawName(itemName, category);
+    const product = matchProduct(products, '', rawName)?.product ?? null;
+    return { rawName, product, code: extractCode('', rawName) };
+  };
+
+  // Parser untuk Copas WhatsApp / Teks / Surat Jalan
   const parseTextToItems = (text: string, currentCategory: string = invoiceCategory) => {
-    if (!text || !text.trim()) return;
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
+    const parsed = parseInboundText(text);
+    if (parsed.invoiceNumber) setInvoiceNumber(parsed.invoiceNumber);
+    if (parsed.supplierName) setSupplierName(parsed.supplierName);
 
-    if (lines.length === 0) return;
-
-    let startIndex = 0;
-    // Check if line 0 looks like an invoice number
-    if (lines[0] && (lines[0].toUpperCase().startsWith('SJ') || lines[0].toUpperCase().startsWith('INV') || lines[0].includes('-'))) {
-      const invCandidate = lines[0].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
-      if (invCandidate.length >= 4 && !/\(\d+\)/.test(invCandidate)) {
-        setInvoiceNumber(invCandidate);
-        startIndex = 1;
-      }
-    }
-
-    // Check if line 1 looks like supplier name
-    if (lines[startIndex] && !/\(\d+\)|\s+[-xX:\t=]\s*\d+|\s+\d+\s*(?:pcs|pc)?$/i.test(lines[startIndex])) {
-      const sup = lines[startIndex].replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
-      if (!/^\d+$/.test(sup) && sup.length > 2) {
-        setSupplierName(sup);
-        startIndex += 1;
-      }
-    }
-
-    const itemLines = lines.slice(startIndex);
-    const parsed: InboundFormItem[] = [];
-
-    itemLines.forEach((line, idx) => {
-      // Remove numbering at start like "1. ", "1) ", "• "
-      let cleanLine = line.replace(/^\d+[\.\)\-]\s*|^[\*\•\-\>\:\"]+|\s*[\*\"]+$/g, '').trim();
-      if (!cleanLine) return;
-
-      let itemName = cleanLine;
-      let qty = 1;
-
-      // Pattern 1: name(qty) -> 152(50)
-      const p1 = cleanLine.match(/^(.*?)\((\d+)\)\s*$/);
-      // Pattern 2: name - qty or name : qty or name = qty or name tab qty -> 152 - 50, 152: 50, 152\t50
-      const p2 = cleanLine.match(/^(.*?)\s*[-:xX=\t]\s*(\d+)\s*(?:pcs|pc|buah|bj|lembar)?$/i);
-      // Pattern 3: name qty -> 152 50 or SPARK FLOWER 40 pcs
-      const p3 = cleanLine.match(/^(.*?)\s+(\d+)\s*(?:pcs|pc|buah|bj|lembar)?$/i);
-
-      if (p1) {
-        itemName = p1[1].trim();
-        qty = parseInt(p1[2], 10) || 1;
-      } else if (p2) {
-        itemName = p2[1].trim();
-        qty = parseInt(p2[2], 10) || 1;
-      } else if (p3) {
-        itemName = p3[1].trim();
-        qty = parseInt(p3[2], 10) || 1;
-      }
-
-      itemName = itemName.replace(/^[\*\"\'\:\-]+|[\*\"\'\:\-]+$/g, '').trim();
-      if (!itemName || /^(total|jumlah|grand total|subtotal|page|halaman|tanggal|no|invoice)/i.test(itemName)) return;
-
-      const prod = findProductMatch(itemName, currentCategory);
-      const isParis = currentCategory === 'PARIS JAPAN' || itemName.toUpperCase().includes('PARIS');
-      const isBella = currentCategory === 'BELLA SQUARE' || itemName.toUpperCase().includes('BELLA');
-
-      let categoryName = currentCategory !== 'MIX' ? currentCategory : (isParis ? 'PARIS JAPAN' : (isBella ? 'BELLA SQUARE' : 'BABY TRYSPAN'));
-      let sku = prod ? prod.sku : (isParis ? (itemName.toUpperCase().startsWith('PJ-') ? itemName.toUpperCase() : `PJ-${itemName.toUpperCase()}`) : itemName.toUpperCase());
-
-      let displayName = '';
-      if (prod) {
-        const hasMotifInName = prod.motif && prod.name.toLowerCase().includes(prod.motif.toLowerCase());
-        const motifPart = prod.motif ? (hasMotifInName ? '' : ` - ${prod.motif}`) : (itemName && !prod.name.toLowerCase().includes(itemName.toLowerCase()) ? ` - ${itemName}` : '');
-        displayName = `${prod.name}${motifPart}`;
-      } else {
-        displayName = currentCategory !== 'MIX' ? `${currentCategory} - ${itemName}` : itemName;
-      }
-
-      // Detect suffix like "12-2", "37-1", "PJ-12-2" when item is not yet in Master Data
-      let baseCandidate: InboundFormItem['baseCandidate'] = null;
-      if (!prod) {
-        const cleanSku = itemName.replace(/^(pj|bt|bs|bw)[-_ ]*/i, '').trim();
-        const suffixMatch = cleanSku.match(/^(.*?)[-_](\d+)$/);
-        if (suffixMatch) {
-          const baseCode = suffixMatch[1].trim();
-          const suffixNum = suffixMatch[2].trim();
-          if (baseCode) {
-            const baseProd = findProductMatch(baseCode, currentCategory);
-            if (baseProd) {
-              baseCandidate = {
-                baseCode,
-                suffixNum,
-                baseProd,
-              };
-            }
-          }
-        }
-      }
-
-      parsed.push({
+    const next: InboundFormItem[] = parsed.items.map((line, idx) => {
+      const { rawName, product, code } = resolveByText(line.name, currentCategory);
+      return {
         id: `inbound-item-${Date.now()}-${idx}`,
-        productId: prod ? prod.id : null,
-        productSku: sku,
-        productName: displayName,
-        expectedQty: qty,
-        baseCandidate,
-        confirmedAction: null,
-      });
+        productId: product ? product.id : null,
+        productSku: product ? product.sku : code,
+        productName: product ? displayNameFor(product) : rawName,
+        expectedQty: line.qty,
+        qtyGiven: line.qtyGiven,
+        createNew: false,
+      };
     });
 
-    if (parsed.length > 0) {
-      setItems(parsed);
+    if (next.length > 0) {
+      setItems(next);
     }
   };
 
-  const handleConfirmItemMerge = (index: number, baseProd: ProductItem) => {
+  const handlePickSuggestion = (index: number, prod: ProductItem) => {
     const updated = [...items];
     updated[index] = {
       ...updated[index],
-      productId: baseProd.id,
-      productSku: baseProd.sku,
-      productName: baseProd.name,
-      confirmedAction: 'MERGED',
+      productId: prod.id,
+      productSku: prod.sku,
+      productName: displayNameFor(prod),
+      createNew: false,
     };
     setItems(updated);
   };
 
-  const handleConfirmItemDistinct = (index: number) => {
+  const handleCreateNew = (index: number, value: boolean) => {
     const updated = [...items];
-    updated[index] = {
-      ...updated[index],
-      productId: null,
-      confirmedAction: 'DISTINCT',
-    };
+    updated[index] = { ...updated[index], productId: null, createNew: value };
     setItems(updated);
   };
 
@@ -310,6 +184,16 @@ BW83(20)`
   const handleItemChange = (index: number, field: keyof InboundFormItem, value: any) => {
     const updated = [...items];
     updated[index] = { ...updated[index], [field]: value };
+    if (field === 'productName') {
+      // Teks diubah: cocokkan ulang, dan batalkan konfirmasi "buat produk baru" sebelumnya
+      const { product, code } = resolveByText(String(value), invoiceCategory);
+      updated[index].productId = product ? product.id : null;
+      updated[index].productSku = product ? product.sku : code;
+      updated[index].createNew = false;
+    }
+    if (field === 'expectedQty') {
+      updated[index].qtyGiven = true;
+    }
     setItems(updated);
   };
 
@@ -320,6 +204,7 @@ BW83(20)`
       productId: prod.id,
       productSku: prod.sku,
       productName: `${prod.name}${prod.motif ? ` - ${prod.motif}` : ''}`,
+      createNew: false,
     };
     setItems(updated);
   };
@@ -343,6 +228,14 @@ BW83(20)`
       return;
     }
 
+    const unresolved = validItems.filter((it) => !it.productId && !it.createNew);
+    if (unresolved.length > 0) {
+      setError(
+        `Masih ada ${unresolved.length} kode yang belum jelas (ditandai kuning). Pilih produk yang sesuai atau tekan "Buat produk baru" untuk tiap kode.`
+      );
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -358,6 +251,7 @@ BW83(20)`
           productSku: it.productSku,
           productName: it.productName,
           expectedQty: it.expectedQty,
+          createNew: !!it.createNew,
         })),
       });
 
@@ -530,7 +424,7 @@ BW83(20)`
                   onChange={(e) => {
                     setRawText(e.target.value);
                   }}
-                  placeholder="Contoh format:&#10;SJ-202610-001&#10;Konveksi Bandung&#10;88(50)&#10;155(30)&#10;SPARK FLOWER(40)&#10;BW83(20)"
+                  placeholder="Contoh format:&#10;SJ-202610-001&#10;Konveksi Bandung&#10;88(50)&#10;12-2(30)&#10;SPARK FLOWER(40)&#10;BW83(20)"
                   className="w-full p-3 bg-white rounded-xl border border-slate-200 font-mono text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500/20"
                 />
 
@@ -558,7 +452,7 @@ BW83(20)`
           <div className="space-y-3 pt-2">
             <div className="flex items-center justify-between">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                <Package className="w-3.5 h-3.5 text-indigo-600" /> Rincian Barang Kiriman ({items.length} SKU • {totalExpectedPcs} Pcs)
+                <Package className="w-3.5 h-3.5 text-indigo-600" /> Rincian Barang Kiriman ({items.length} SKU • {totalExpectedPcs} Pcs){unresolvedCount > 0 ? ` • ${unresolvedCount} belum jelas` : ''}
               </h4>
               <button
                 type="button"
@@ -611,44 +505,68 @@ BW83(20)`
                     </div>
                   </div>
 
-                  {/* Suffix Confirmation Warning & Choices (e.g. 12-2 vs 12) */}
-                  {it.baseCandidate && !it.confirmedAction && (
-                    <div className="p-2 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                  {/* Status pencocokan: terhubung / akan dibuat baru / belum jelas */}
+                  {it.productId ? (
+                    <div className="text-[11px] text-emerald-700 font-bold flex items-center gap-1 pl-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Terhubung ke produk: {it.productSku}
+                    </div>
+                  ) : it.createNew ? (
+                    <div className="p-2 bg-indigo-50 rounded-lg border border-indigo-200 text-xs text-indigo-900 flex flex-wrap items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        Produk baru akan dibuat dengan kode <strong>{it.productSku}</strong> saat disimpan.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleCreateNew(idx, false)}
+                        className="px-2 py-1 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-[10px] cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="p-2 bg-amber-50 rounded-lg border border-amber-300 text-xs text-amber-900 space-y-1.5">
                       <div className="flex items-center gap-1.5">
                         <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                         <span>
-                          Kode <strong>{it.baseCandidate.baseCode}-{it.baseCandidate.suffixNum}</strong>: Ditemukan motif dasar <strong>{it.baseCandidate.baseProd.name}</strong> ({it.baseCandidate.baseProd.sku}).
+                          Kode <strong>{it.productSku || '?'}</strong> belum ada di Master Produk.
                         </span>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                      {(() => {
+                        const suggestions = suggestProducts(products, '', it.productName);
+                        return suggestions.length > 0 ? (
+                          <div className="flex flex-wrap items-center gap-1.5 pl-5">
+                            <span className="text-amber-800">Salah ketik? Mirip dengan:</span>
+                            {suggestions.map((sg) => (
+                              <button
+                                key={sg.product.id}
+                                type="button"
+                                onClick={() => handlePickSuggestion(idx, sg.product as ProductItem)}
+                                title={sg.reason}
+                                className="px-2 py-1 rounded bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px] cursor-pointer shadow-2xs"
+                              >
+                                Pakai {sg.product.sku}
+                                {sg.product.motif ? ` (${sg.product.motif})` : ''}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
+                      <div className="pl-5">
                         <button
                           type="button"
-                          onClick={() => handleConfirmItemMerge(idx, it.baseCandidate!.baseProd)}
-                          className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] cursor-pointer shadow-2xs"
-                          title="Gabungkan stok ke motif dasar (Roll/Batch)"
+                          onClick={() => handleCreateNew(idx, true)}
+                          className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] cursor-pointer shadow-2xs"
                         >
-                          ✓ Sama (Roll/Batch {it.baseCandidate.baseProd.sku})
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmItemDistinct(idx)}
-                          className="px-2 py-1 rounded bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-bold text-[10px] cursor-pointer shadow-2xs"
-                          title="Bukan roll/batch, catat sebagai motif baru tersendiri"
-                        >
-                          ✕ Beda Motif (Produk Baru)
+                          + Buat produk baru ({it.productSku})
                         </button>
                       </div>
                     </div>
                   )}
 
-                  {it.confirmedAction === 'MERGED' && (
-                    <div className="text-[11px] text-indigo-700 font-bold flex items-center gap-1 pl-1">
-                      <CheckCircle2 className="w-3 h-3 text-indigo-600" /> Digabungkan ke stok: {it.productSku}
-                    </div>
-                  )}
-                  {it.confirmedAction === 'DISTINCT' && (
-                    <div className="text-[11px] text-amber-800 font-bold flex items-center gap-1 pl-1">
-                      <CheckCircle2 className="w-3 h-3 text-amber-600" /> Dicatat sebagai motif tersendiri (Beda motif)
+                  {it.qtyGiven === false && (
+                    <div className="text-[11px] text-slate-500 pl-1">
+                      Jumlah tidak tertulis di teks, dipakai 1 pcs. Cek dan ubah kalau perlu.
                     </div>
                   )}
                 </div>
