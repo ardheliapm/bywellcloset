@@ -113,6 +113,38 @@ function labelKeys(p: MatchableProduct): string[] {
   return Array.from(keys);
 }
 
+/** Teks nama motif sebuah produk (kolom Motif dan kolom Nama tanpa label kategori), huruf besar. */
+function labelTexts(p: MatchableProduct): string[] {
+  const texts: string[] = [];
+  if (p.motif && p.motif.trim()) texts.push(p.motif.toUpperCase());
+  const fromName = stripCategoryLabel(p.name);
+  if (fromName) texts.push(fromName.toUpperCase());
+  return texts;
+}
+
+function tokensOf(text: string): string[] {
+  return text.toUpperCase().match(/[A-Z0-9]+/g) || [];
+}
+
+/**
+ * Kemiripan per kata. Semua kata dari teks yang lebih pendek harus punya pasangan di teks
+ * yang lebih panjang (sama persis, atau selisih satu huruf), mis. "IRISH TULIPS" dan
+ * "IRISH TULIP BLUE". Mengembalikan 0 kalau tidak memenuhi.
+ */
+function tokenOverlapScore(a: string[], b: string[]): number {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  const meaningful = short.filter((t) => t.length >= 3);
+  if (meaningful.length === 0) return 0;
+  if (meaningful.length < 2 && meaningful[0].length < 5) return 0;
+  const used = new Set<number>();
+  for (const t of meaningful) {
+    const idx = long.findIndex((u, i) => !used.has(i) && (u === t || (t.length >= 4 && editDistance(u, t) <= 1)));
+    if (idx === -1) return 0;
+    used.add(idx);
+  }
+  return 0.7 + 0.1 * (meaningful.length / Math.max(long.length, 1));
+}
+
 function preferActive<P extends MatchableProduct>(list: P[]): P | null {
   return list.find((p) => p.isActive !== false) || list[0] || null;
 }
@@ -210,17 +242,23 @@ export function suggestProducts<P extends MatchableProduct>(
   const code = extractCode(rawSku, rawName);
   if (!code) return [];
 
-  const pool = products.filter((p) => productInCategory(p, cat));
   const codeKey = textKey(code);
+  const codeTokens = tokensOf(code);
   const codeSuffix = splitSuffix(code);
   const found = new Map<string, ProductSuggestion<P>>();
 
-  const offer = (p: P, score: number, reason: string) => {
+  const offerBase = (p: P, score: number, reason: string) => {
     const existing = found.get(p.id);
     if (!existing || existing.score < score) found.set(p.id, { product: p, score, reason });
   };
 
-  for (const p of pool) {
+  for (const p of products) {
+    // Saran dicari di semua kategori (hanya saran, manusia yang memutuskan). Kode angka tetap
+    // dibatasi satu kategori karena angka yang sama di kategori lain hanya jadi noise.
+    const sameCategory = productInCategory(p, cat);
+    if (!sameCategory && !hasLetter(code)) continue;
+    const offer = (prod: P, score: number, reason: string) =>
+      offerBase(prod, sameCategory ? score : score - 0.05, sameCategory ? reason : `${reason} (kategori lain)`);
     const pCode = stripCategoryPrefix(canonicalCode(p.sku));
     const pKey = textKey(pCode);
     const pSuffix = splitSuffix(pCode);
@@ -252,6 +290,11 @@ export function suggestProducts<P extends MatchableProduct>(
           (mKey.includes(codeKey) || codeKey.includes(mKey))
         ) {
           bestScore = Math.max(bestScore, 0.75);
+        }
+      }
+      if (bestScore === 0 && codeTokens.length > 0) {
+        for (const text of labelTexts(p)) {
+          bestScore = Math.max(bestScore, tokenOverlapScore(codeTokens, tokensOf(text)));
         }
       }
       if (bestScore > 0) {

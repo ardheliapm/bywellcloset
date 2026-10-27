@@ -145,3 +145,29 @@ test('produk yang namanya hanya kategori tidak ikut dicocokkan atau disarankan',
   assert.equal(matchProduct(junk, '', 'BABY TRYSPAN - KOPI HITAM'), null);
   assert.deepEqual(suggestProducts(junk, '', 'BABY TRYSPAN - KOPI HITAM'), []);
 });
+
+test('saran per kata: IRISH TULIPS mengenali "IRISH TULIP BLUE", dan saran lintas kategori diberi tanda', () => {
+  const list = [
+    mk('BW76', 'BABY TRYSPAN', 'IRISH TULIP BLUE'),
+    mk('BW80', 'BABY TRYSPAN', 'SPARK FLOWER'),
+    mk('BS-9', 'BELLA SQUARE', 'IRISH TULIP'),
+  ];
+  const s = suggestProducts(list, '', 'BABY TRYSPAN - IRISH TULIPS');
+  const skus = s.map((x) => x.product.sku);
+  assert.ok(skus.includes('BW76'), 'per kata');
+  assert.ok(skus.includes('BS-9'), 'lintas kategori tetap muncul sebagai saran');
+  assert.ok(!skus.includes('BW80'));
+  assert.match(s.find((x) => x.product.sku === 'BS-9').reason, /kategori lain/);
+  // diurutkan menurut kemiripan: yang selisih satu huruf (BS-9) lebih dulu dari yang kelebihan kata (BW76)
+  assert.equal(skus[0], 'BS-9');
+});
+
+test('saran per kata tidak asal: kata umum tunggal yang pendek tidak memicu saran', () => {
+  const list = [mk('BW76', 'BABY TRYSPAN', 'BLUE PEONY'), mk('BW77', 'BABY TRYSPAN', 'BLUE DAISY')];
+  assert.deepEqual(suggestProducts(list, '', 'BABY TRYSPAN - BLUE'), []);
+});
+
+test('kode angka tidak disarankan dari kategori lain', () => {
+  const list = [mk('BS-12', 'BELLA SQUARE'), paris('37')];
+  assert.deepEqual(suggestProducts(list, 'PJ-12-2', 'PARIS JAPAN - 12-2'), []);
+});
