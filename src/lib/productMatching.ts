@@ -94,6 +94,19 @@ function hasLetter(s: string): boolean {
   return /[A-Za-z]/.test(s);
 }
 
+/** Kode berbentuk kode (angka/kode pendek seperti "152", "118W", "BW83", "12-2"), bukan nama motif. */
+function isCodeLike(code: string): boolean {
+  return !hasLetter(code) || /^[A-Z]{0,2}-?\d+[A-Z]?(-\d+)?$/.test(code);
+}
+
+/**
+ * Bentuk kode untuk ditampilkan dan disimpan sebagai SKU. Kode angka dipertahankan ("12-2"),
+ * sedangkan nama motif memakai spasi sesuai kebiasaan Master ("IRISH TULIP", bukan "IRISH-TULIP").
+ */
+export function humanCode(code: string): string {
+  return isCodeLike(code) ? code : code.replace(/-/g, ' ');
+}
+
 /** Buang label kategori di depan teks: "BABY TRYSPAN - IRISH TULIP" -> "IRISH TULIP" */
 function stripCategoryLabel(text: string): string {
   return trimDecoration(text).replace(CATEGORY_LABEL_RE, '').trim();
@@ -149,6 +162,9 @@ function tokenOverlapScore(a: string[], b: string[]): number {
   const meaningful = short.filter((t) => t.length >= 3);
   if (meaningful.length === 0) return 0;
   if (meaningful.length < 2 && meaningful[0].length < 5) return 0;
+  // Kata yang cocok harus mencakup sebagian besar teks yang lebih panjang; satu kata umum
+  // (mis. "MONOGRAM") dari teks dua kata tidak cukup.
+  if (meaningful.length / Math.max(long.length, 1) < 0.6) return 0;
   const used = new Set<number>();
   for (const t of meaningful) {
     const idx = long.findIndex((u, i) => !used.has(i) && (u === t || (t.length >= 4 && editDistance(u, t) <= 1)));
@@ -300,8 +316,10 @@ export function suggestProducts<P extends MatchableProduct>(
           bestScore = Math.max(bestScore, sim);
         } else if (
           Math.min(codeKey.length, mKey.length) >= 5 &&
-          (mKey.includes(codeKey) || codeKey.includes(mKey))
+          (mKey.includes(codeKey) || codeKey.includes(mKey)) &&
+          Math.min(codeKey.length, mKey.length) / longest >= 0.7
         ) {
+          // Salah satu teks termuat di teks lain dan panjangnya cukup berdekatan (bukan sekadar kata umum)
           bestScore = Math.max(bestScore, 0.75);
         }
       }
@@ -370,14 +388,15 @@ export function buildNewProductDraft(rawSku: string, rawName: string): NewProduc
       wholesalePrice: 35000,
     };
   }
-  // BABY TRYSPAN: kode seperti "152", "118W", "BW83" = SKU; teks lain (mis. "IRISH TULIP") = nama motif
-  const codeLike = !hasLetter(code) || /^[A-Z]{0,2}-?\d+[A-Z]?(-\d+)?$/.test(code);
+  // BABY TRYSPAN mengikuti kebiasaan Master: nama motif disimpan di kolom SKU (huruf besar, spasi),
+  // kolom Motif dikosongkan. Kode seperti "152", "118W", "BW83" tetap dipakai apa adanya.
   const rawSkuKey = canonicalCode(rawSku);
   const skuFromRaw = rawSkuKey && !IGNORED_SKUS.has(rawSkuKey) ? rawSkuKey : '';
+  const sku = isCodeLike(code) ? skuFromRaw || code : humanCode(code);
   return {
-    sku: skuFromRaw || code,
+    sku,
     name: 'BABY TRYSPAN',
-    motif: codeLike ? null : code.replace(/-/g, ' '),
+    motif: null,
     category: cat,
     costPrice: 25000,
     sellingPrice: 42000,

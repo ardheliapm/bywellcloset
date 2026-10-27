@@ -7,6 +7,7 @@ import {
   suggestProducts,
   buildNewProductDraft,
   editDistance,
+  humanCode,
 } from '../src/lib/productMatching.ts';
 
 const mk = (sku, name, motif = null) => ({ id: `${sku}|${name}`, sku, name, motif, isActive: true });
@@ -104,7 +105,8 @@ test('rancangan produk baru mengikuti kebiasaan Master', () => {
   assert.equal(p.name, 'PARIS JAPAN');
   const m = buildNewProductDraft('', 'IRISH TULIP');
   assert.equal(m.name, 'BABY TRYSPAN');
-  assert.equal(m.motif, 'IRISH TULIP');
+  assert.equal(m.sku, 'IRISH TULIP'); // nama motif disimpan di SKU dengan spasi, seperti produk lain
+  assert.equal(m.motif, null);
   const b = buildNewProductDraft('BW83', '');
   assert.equal(b.sku, 'BW83');
   assert.equal(b.motif, null);
@@ -190,4 +192,40 @@ test('SKU berupa kode pendek tidak dianggap nama (tidak menimbulkan saran palsu)
   const list = [mk('BW83', 'BABY TRYSPAN'), mk('118W', 'BABY TRYSPAN')];
   assert.deepEqual(suggestProducts(list, '', 'BABY TRYSPAN - BW84'), []);
   assert.equal(skuOf(matchProduct(list, 'BW83', '')), 'BW83');
+});
+
+test('produk baru mengikuti kebiasaan Master (SKU = nama motif berspasi)', () => {
+  for (const [rawSku, rawName] of [['', 'BABY TRYSPAN - IRISH TULIPS'], ['IRISH TULIPS', 'BABY TRYSPAN - IRISH TULIPS'], ['IRISH-TULIPS', 'BABY TRYSPAN - IRISH TULIPS']]) {
+    const d = buildNewProductDraft(rawSku, rawName);
+    assert.equal(d.sku, 'IRISH TULIPS', `${rawSku}|${rawName}`);
+    assert.equal(d.name, 'BABY TRYSPAN');
+    assert.equal(d.motif, null);
+    assert.equal(d.costPrice, 25000);
+    assert.equal(d.sellingPrice, 42000);
+  }
+  assert.equal(buildNewProductDraft('', 'BABY TRYSPAN - MINI FLOWER NUDE YELLOW').sku, 'MINI FLOWER NUDE YELLOW');
+  // kode tetap kode
+  assert.equal(buildNewProductDraft('BW83', 'BABY TRYSPAN').sku, 'BW83');
+  assert.equal(buildNewProductDraft('', 'PARIS JAPAN - 12-2').sku, '12-2');
+  assert.equal(humanCode('IRISH-TULIPS'), 'IRISH TULIPS');
+  assert.equal(humanCode('12-2'), '12-2');
+  assert.equal(humanCode('118W'), '118W');
+});
+
+test('produk yang dibuat dengan gaya baru dikenali lagi saat dicatat ulang (tidak membuat kembar)', () => {
+  const d = buildNewProductDraft('', 'BABY TRYSPAN - IRISH TULIPS');
+  const created = { id: 'x', sku: d.sku, name: d.name, motif: d.motif, isActive: true };
+  assert.equal(matchProduct([created], '', 'BABY TRYSPAN - IRISH TULIPS')?.product.sku, 'IRISH TULIPS');
+  assert.equal(matchProduct([created], '', 'IRISH TULIPS')?.product.sku, 'IRISH TULIPS');
+  assert.equal(matchProduct([created], '', 'irish tulips')?.product.sku, 'IRISH TULIPS');
+});
+
+test('kata umum yang cuma kebetulan termuat tidak memicu saran ke semua produk sejenis', () => {
+  const list = [
+    { id: '1', sku: 'MONOGRAM SOFT BLUE', name: 'BABY TRYSPAN', motif: 'MONOGRAM', isActive: true },
+    { id: '2', sku: 'MONOGRAM SAGE PINK', name: 'BABY TRYSPAN', motif: 'MONOGRAM', isActive: true },
+    { id: '3', sku: 'MONOGRAM SOFT PINK', name: 'BABY TRYSPAN', motif: 'MONOGRAM', isActive: true },
+  ];
+  const skus = suggestProducts(list, '', 'BABY TRYSPAN - monogram pink', 5).map((x) => x.product.sku).sort();
+  assert.deepEqual(skus, ['MONOGRAM SAGE PINK', 'MONOGRAM SOFT PINK']);
 });
