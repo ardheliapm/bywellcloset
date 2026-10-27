@@ -126,7 +126,7 @@ export default function Sidebar() {
               </p>
             </div>
             <span className="px-2 py-1 rounded bg-slate-700 text-slate-300 font-mono text-[10px]">
-              v1.0
+              v1.0{process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ? ` · ${process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA.slice(0, 7)}` : ''}
             </span>
           </div>
         </div>
