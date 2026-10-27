@@ -7,7 +7,9 @@ import {
   setPinSessionCookie,
   clearPinSessionCookie,
   getStoredHashedPin,
+  hasPinSession,
 } from '@/lib/auth';
+import { isAuthConfigured } from '@/lib/session';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 
@@ -18,14 +20,31 @@ export async function verifyPin(pinInput: string) {
       return { success: false, error: 'Silakan masukkan 6 digit PIN.' };
     }
 
+    if (!isAuthConfigured()) {
+      return {
+        success: false,
+        error: 'Pengaman login (AUTH_SECRET) belum diatur di server. Hubungi admin sistem.',
+      };
+    }
+
     const currentHashed = await getStoredHashedPin();
+    if (!currentHashed) {
+      return {
+        success: false,
+        error: 'PIN belum diatur di server (INITIAL_PIN). Hubungi admin sistem.',
+      };
+    }
+
     const isValid = comparePin(cleanPin, currentHashed);
 
     if (!isValid) {
       return { success: false, error: 'PIN yang Anda masukkan salah.' };
     }
 
-    await setPinSessionCookie();
+    const sessionSet = await setPinSessionCookie();
+    if (!sessionSet) {
+      return { success: false, error: 'Gagal membuat sesi login. Hubungi admin sistem.' };
+    }
     revalidatePath('/');
     return { success: true };
   } catch (error: any) {
@@ -42,6 +61,10 @@ export async function lockApp() {
 
 export async function changePin(oldPin: string, newPin: string) {
   try {
+    if (!(await hasPinSession())) {
+      return { success: false, error: 'Sesi login sudah berakhir. Silakan login ulang.' };
+    }
+
     const oldClean = oldPin.trim();
     const newClean = newPin.trim();
 
@@ -53,7 +76,14 @@ export async function changePin(oldPin: string, newPin: string) {
       return { success: false, error: 'PIN baru harus terdiri dari tepat 6 angka (digit).' };
     }
 
+    if (newClean === '123456') {
+      return { success: false, error: 'PIN baru terlalu mudah ditebak. Pilih angka lain.' };
+    }
+
     const currentHashed = await getStoredHashedPin();
+    if (!currentHashed) {
+      return { success: false, error: 'PIN belum diatur di server.' };
+    }
     const isOldValid = comparePin(oldClean, currentHashed);
 
     if (!isOldValid) {
@@ -78,25 +108,5 @@ export async function changePin(oldPin: string, newPin: string) {
   } catch (error: any) {
     console.error('Error changing PIN:', error);
     return { success: false, error: error.message || 'Gagal mengubah PIN.' };
-  }
-}
-
-export async function resetPinToDefault() {
-  try {
-    const defaultHash = hashPin('123456');
-    await prisma.user.upsert({
-      where: { username: 'admin' },
-      update: { password: defaultHash },
-      create: {
-        username: 'admin',
-        name: 'Admin Bywell Closet',
-        password: defaultHash,
-        role: 'ADMIN',
-      },
-    });
-    return { success: true, message: 'PIN berhasil dikembalikan ke 123456' };
-  } catch (error: any) {
-    console.error('Error resetting PIN:', error);
-    return { success: false, error: error.message || 'Gagal mereset PIN' };
   }
 }

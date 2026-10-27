@@ -1,39 +1,39 @@
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
 import { prisma } from './prisma';
-
-const PIN_COOKIE_NAME = 'bywell_pin_session';
-const DEFAULT_PIN = '123456';
+import {
+  PIN_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+  createSessionToken,
+  verifySessionToken,
+} from './session';
 
 export function hashPin(pin: string): string {
   return bcrypt.hashSync(pin, 10);
 }
 
 export function comparePin(pin: string, hashed: string): boolean {
-  const clean = pin.trim();
-  // Master emergency fallback: default PIN always valid
-  if (clean === DEFAULT_PIN) {
-    return true;
-  }
-  if (clean === hashed) {
-    return true;
-  }
   try {
-    return bcrypt.compareSync(clean, hashed);
+    return bcrypt.compareSync(pin.trim(), hashed);
   } catch {
-    return clean === hashed;
+    return false;
   }
 }
 
-export async function setPinSessionCookie() {
+/** Pasang cookie sesi (30 hari). Mengembalikan false jika AUTH_SECRET belum diatur. */
+export async function setPinSessionCookie(): Promise<boolean> {
+  const token = await createSessionToken();
+  if (!token) return false;
+
   const cookieStore = await cookies();
-  cookieStore.set(PIN_COOKIE_NAME, 'authenticated', {
+  cookieStore.set(PIN_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 30, // 30 hari
+    maxAge: SESSION_MAX_AGE_SECONDS,
     path: '/',
   });
+  return true;
 }
 
 export async function clearPinSessionCookie() {
@@ -43,35 +43,37 @@ export async function clearPinSessionCookie() {
 
 export async function hasPinSession(): Promise<boolean> {
   const cookieStore = await cookies();
-  const session = cookieStore.get(PIN_COOKIE_NAME);
-  return !!(session && session.value);
+  return verifySessionToken(cookieStore.get(PIN_COOKIE_NAME)?.value);
 }
 
 /**
- * Get the current active hashed PIN from database.
- * If no admin record exists, create default admin with PIN '123456'.
+ * Ambil hash PIN admin dari database.
+ * Jika belum ada data admin, dibuat dari environment variable INITIAL_PIN
+ * (harus 6 angka). Tanpa INITIAL_PIN, tidak ada PIN bawaan: login ditolak.
  */
-export async function getStoredHashedPin(): Promise<string> {
+export async function getStoredHashedPin(): Promise<string | null> {
   try {
-    let adminUser = await prisma.user.findFirst({
+    const adminUser = await prisma.user.findFirst({
       where: { username: 'admin' },
     });
+    if (adminUser) return adminUser.password;
 
-    if (!adminUser) {
-      const defaultHash = hashPin(DEFAULT_PIN);
-      adminUser = await prisma.user.create({
+    const initialPin = process.env.INITIAL_PIN?.trim();
+    if (initialPin && /^\d{6}$/.test(initialPin)) {
+      const created = await prisma.user.create({
         data: {
           username: 'admin',
           name: 'Admin Bywell Closet',
-          password: defaultHash,
+          password: hashPin(initialPin),
           role: 'ADMIN',
         },
       });
+      return created.password;
     }
 
-    return adminUser.password;
+    return null;
   } catch (error) {
-    console.error('Error fetching stored PIN, using fallback hash:', error);
-    return hashPin(DEFAULT_PIN);
+    console.error('Error fetching stored PIN:', error);
+    return null;
   }
 }
