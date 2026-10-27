@@ -1,35 +1,55 @@
 import { cookies } from 'next/headers';
 import bcrypt from 'bcryptjs';
 import { prisma } from './prisma';
+import {
+  FINANCE_COOKIE_NAME,
+  createSessionToken,
+  getSessionMaxAge,
+  safeEqual,
+  verifySessionToken,
+} from './session';
 
-export const FINANCE_COOKIE_NAME = 'bywell_finance_session';
-export const MASTER_FINANCE_PASSWORD = process.env.FINANCE_PASSWORD || 'Whildanakbar11*';
+export { FINANCE_COOKIE_NAME };
 
 /**
- * Check if the finance (omset) section is currently unlocked via session cookie
+ * Password utama halaman keuangan, diambil dari environment variable
+ * FINANCE_PASSWORD (Vercel). Tidak ada password bawaan di kode: jika belum
+ * diatur (atau kurang dari 8 karakter), password utama dianggap tidak ada.
+ */
+function getMasterFinancePassword(): string | null {
+  const password = process.env.FINANCE_PASSWORD;
+  return password && password.length >= 8 ? password : null;
+}
+
+/**
+ * Cek apakah halaman keuangan sedang terbuka lewat cookie sesi yang valid
+ * (ditandatangani, scope finance, masa berlaku 7 hari).
  */
 export async function isFinanceUnlocked(): Promise<boolean> {
   const cookieStore = await cookies();
-  const session = cookieStore.get(FINANCE_COOKIE_NAME);
-  return !!(session && session.value === 'authenticated');
+  return verifySessionToken(cookieStore.get(FINANCE_COOKIE_NAME)?.value, 'finance');
 }
 
 /**
- * Set the session cookie for finance unlock (valid for 7 days)
+ * Pasang cookie sesi keuangan (7 hari). Mengembalikan false jika AUTH_SECRET belum diatur.
  */
-export async function setFinanceSessionCookie(): Promise<void> {
+export async function setFinanceSessionCookie(): Promise<boolean> {
+  const token = await createSessionToken('finance');
+  if (!token) return false;
+
   const cookieStore = await cookies();
-  cookieStore.set(FINANCE_COOKIE_NAME, 'authenticated', {
+  cookieStore.set(FINANCE_COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7, // 7 days
+    maxAge: getSessionMaxAge('finance'),
     path: '/',
   });
+  return true;
 }
 
 /**
- * Clear the finance session cookie (relock the finance page)
+ * Hapus cookie sesi keuangan (kunci lagi halaman keuangan)
  */
 export async function clearFinanceSessionCookie(): Promise<void> {
   const cookieStore = await cookies();
@@ -37,18 +57,19 @@ export async function clearFinanceSessionCookie(): Promise<void> {
 }
 
 /**
- * Validate the finance password against the master password or database record
+ * Validasi password keuangan terhadap FINANCE_PASSWORD atau data finance_owner di database
  */
 export async function checkFinancePassword(passwordInput: string): Promise<boolean> {
   const clean = passwordInput.trim();
   if (!clean) return false;
 
-  // 1. Direct check with master password
-  if (clean === MASTER_FINANCE_PASSWORD) {
+  // 1. Password utama dari environment variable
+  const master = getMasterFinancePassword();
+  if (master && safeEqual(clean, master)) {
     return true;
   }
 
-  // 2. Fallback check with database finance_owner user if exists
+  // 2. Cadangan: pengguna finance_owner di database (hash bcrypt)
   try {
     const owner = await prisma.user.findFirst({
       where: { username: 'finance_owner' },
@@ -59,10 +80,7 @@ export async function checkFinancePassword(passwordInput: string): Promise<boole
           return true;
         }
       } catch {
-        // Fallback for plain text if any
-        if (clean === owner.password) {
-          return true;
-        }
+        return false;
       }
     }
   } catch (err) {

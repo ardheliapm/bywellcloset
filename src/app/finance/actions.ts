@@ -9,6 +9,8 @@ import {
   isFinanceUnlocked,
 } from '@/lib/financeAuth';
 
+const LOCKED_MESSAGE = 'Halaman keuangan terkunci. Masukkan password keuangan terlebih dahulu.';
+
 export async function verifyFinancePassword(passwordInput: string): Promise<{ success: boolean; error?: string }> {
   try {
     const clean = passwordInput ? passwordInput.trim() : '';
@@ -21,7 +23,13 @@ export async function verifyFinancePassword(passwordInput: string): Promise<{ su
       return { success: false, error: 'Password salah. Akses ke halaman omset ditolak.' };
     }
 
-    await setFinanceSessionCookie();
+    const sessionSet = await setFinanceSessionCookie();
+    if (!sessionSet) {
+      return {
+        success: false,
+        error: 'Pengaman login (AUTH_SECRET) belum diatur di server. Hubungi admin sistem.',
+      };
+    }
     revalidatePath('/finance');
     revalidatePath('/');
     return { success: true };
@@ -380,6 +388,10 @@ export async function addFinanceTransaction(data: {
   transactionDate?: Date;
 }) {
   try {
+    if (!(await isFinanceUnlocked())) {
+      return { success: false, error: LOCKED_MESSAGE };
+    }
+
     const amountClean = Math.max(0, Math.floor(data.amount || 0));
     const descClean = data.description.trim();
 
@@ -417,6 +429,10 @@ export async function updateFinanceTransaction(id: string, data: {
   description: string;
 }) {
   try {
+    if (!(await isFinanceUnlocked())) {
+      return { success: false, error: LOCKED_MESSAGE };
+    }
+
     const amountClean = Math.max(0, Math.floor(data.amount || 0));
     const descClean = data.description.trim();
 
@@ -449,6 +465,10 @@ export async function updateFinanceTransaction(id: string, data: {
 
 export async function deleteFinanceTransaction(id: string) {
   try {
+    if (!(await isFinanceUnlocked())) {
+      return { success: false, error: LOCKED_MESSAGE };
+    }
+
     await prisma.financeTransaction.delete({
       where: { id },
     });
