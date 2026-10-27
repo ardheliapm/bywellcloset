@@ -100,6 +100,15 @@ function stripCategoryLabel(text: string): string {
 }
 
 /**
+ * SKU yang berisi kata (mis. "IRISH TULLIP"), bukan sekadar kode ("12-2", "BW83", "118W").
+ * Produk lama sering menyimpan nama motif di kolom SKU, jadi SKU seperti ini ikut dihitung sebagai nama.
+ */
+function skuAsText(p: MatchableProduct): string {
+  const sku = (p.sku || '').toUpperCase().replace(/[-_]+/g, ' ').trim();
+  return /[A-Z]{3,}/.test(sku) ? sku : '';
+}
+
+/**
  * Kunci nama motif sebuah produk. Nama motif bisa tersimpan di kolom Motif, atau di kolom Nama
  * (mis. Nama "IRISH TULIP" atau "BABY TRYSPAN - IRISH TULIP" dengan Motif kosong). Dua-duanya dipakai.
  * Nama yang hanya berisi nama kategori ("BABY TRYSPAN") tidak dihitung.
@@ -110,6 +119,8 @@ function labelKeys(p: MatchableProduct): string[] {
   if (fromMotif) keys.add(fromMotif);
   const fromName = textKey(stripCategoryLabel(p.name));
   if (fromName) keys.add(fromName);
+  const fromSku = skuAsText(p);
+  if (fromSku) keys.add(textKey(fromSku));
   return Array.from(keys);
 }
 
@@ -119,6 +130,8 @@ function labelTexts(p: MatchableProduct): string[] {
   if (p.motif && p.motif.trim()) texts.push(p.motif.toUpperCase());
   const fromName = stripCategoryLabel(p.name);
   if (fromName) texts.push(fromName.toUpperCase());
+  const fromSku = skuAsText(p);
+  if (fromSku) texts.push(fromSku);
   return texts;
 }
 

@@ -171,3 +171,23 @@ test('kode angka tidak disarankan dari kategori lain', () => {
   const list = [mk('BS-12', 'BELLA SQUARE'), paris('37')];
   assert.deepEqual(suggestProducts(list, 'PJ-12-2', 'PARIS JAPAN - 12-2'), []);
 });
+
+test('kasus nyata: produk lama "BABY TRYSPAN" dengan SKU "IRISH TULLIP" (motif kosong)', () => {
+  const junk = mk('IRISH TULLIP', 'BABY TRYSPAN');
+  const list = [junk, mk('BW80', 'BABY TRYSPAN', 'SPARK FLOWER')];
+  // ketikan persis sama dengan SKU-nya: cocok
+  assert.equal(skuOf(matchProduct(list, '', 'BABY TRYSPAN - IRISH TULLIP')), 'IRISH TULLIP');
+  // ejaan lain: tidak cocok otomatis, tetapi disarankan
+  for (const typed of ['IRISH TULIPS', 'IRISH TULIP', 'IRISH TULLIPS']) {
+    assert.equal(matchProduct(list, '', `BABY TRYSPAN - ${typed}`), null, typed);
+    const s = suggestProducts(list, '', `BABY TRYSPAN - ${typed}`);
+    assert.equal(s[0]?.product.sku, 'IRISH TULLIP', `saran untuk ${typed}`);
+    assert.ok(!s.some((x) => x.product.sku === 'BW80'));
+  }
+});
+
+test('SKU berupa kode pendek tidak dianggap nama (tidak menimbulkan saran palsu)', () => {
+  const list = [mk('BW83', 'BABY TRYSPAN'), mk('118W', 'BABY TRYSPAN')];
+  assert.deepEqual(suggestProducts(list, '', 'BABY TRYSPAN - BW84'), []);
+  assert.equal(skuOf(matchProduct(list, 'BW83', '')), 'BW83');
+});
