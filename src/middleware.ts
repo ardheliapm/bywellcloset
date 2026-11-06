@@ -13,6 +13,11 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(isLoggedIn ? '/' : '/pin', request.url));
   }
 
+  // Pengingat harian dari Vercel Cron (menjaga Supabase tetap aktif); tidak membuka data apa pun
+  if (pathname === '/api/keepalive') {
+    return NextResponse.next();
+  }
+
   if (pathname === '/pin') {
     // Sudah login: tidak perlu lihat halaman PIN lagi
     if (isLoggedIn) {
