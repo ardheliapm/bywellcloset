@@ -17,6 +17,7 @@ import {
   Wallet,
   Clock,
   Lock,
+  ClipboardCheck,
 } from 'lucide-react';
 
 const navItems = [
@@ -28,6 +29,7 @@ const navItems = [
   { name: 'Pre-Order (PO)', href: '/pre-orders', icon: Clock },
   { name: 'Performa Motif', href: '/motif-analysis', icon: PieChart },
   { name: 'Keuangan & Profit', href: '/finance', icon: Wallet, locked: true },
+  { name: 'Stok Opname', href: '/stock-opname', icon: ClipboardCheck },
   { name: 'Riwayat Stok', href: '/stock-history', icon: History },
 ];
 
