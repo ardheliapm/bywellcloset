@@ -95,7 +95,7 @@ function hasLetter(s: string): boolean {
 }
 
 /** Kode berbentuk kode (angka/kode pendek seperti "152", "118W", "BW83", "12-2"), bukan nama motif. */
-function isCodeLike(code: string): boolean {
+export function isCodeLike(code: string): boolean {
   return !hasLetter(code) || /^[A-Z]{0,2}-?\d+[A-Z]?(-\d+)?$/.test(code);
 }
 
