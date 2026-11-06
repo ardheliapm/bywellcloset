@@ -53,6 +53,8 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
   const router = useRouter();
   const [text, setText] = useState('');
   const [overrides, setOverrides] = useState<Record<string, Override>>({});
+  const [mode, setMode] = useState<'SET' | 'ADD'>('SET');
+  const tambah = mode === 'ADD';
   const [zeroMissing, setZeroMissing] = useState(false);
   const [blankAsZero, setBlankAsZero] = useState(false);
   const [note, setNote] = useState('');
@@ -127,14 +129,20 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
   const changes = views.filter(
     (v) =>
       !v.duplicate &&
-      ((v.state === 'matched' && v.product && v.counted !== v.product.physicalStock) || v.state === 'create'),
+      (tambah
+        ? (v.state === 'matched' || v.state === 'create') && (v.counted ?? 0) > 0
+        : (v.state === 'matched' && v.product && v.counted !== v.product.physicalStock) || v.state === 'create'),
   );
   const same = views.filter(
-    (v) => !v.duplicate && v.state === 'matched' && v.product && v.counted === v.product.physicalStock,
+    (v) =>
+      !v.duplicate &&
+      v.state === 'matched' &&
+      v.product &&
+      (tambah ? (v.counted ?? 0) === 0 : v.counted === v.product.physicalStock),
   );
   const blanks = views.filter((v) => v.state === 'blank');
   const skipped = views.filter((v) => v.state === 'skipped');
-  const missingToZero = zeroMissing ? missing.filter((p) => p.physicalStock !== 0) : [];
+  const missingToZero = zeroMissing && !tambah ? missing.filter((p) => p.physicalStock !== 0) : [];
 
   const applyRows: OpnameApplyRow[] = useMemo(() => {
     const list: OpnameApplyRow[] = [];
@@ -172,7 +180,7 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
   const canApply = applyRows.length > 0 && attention.length === 0 && !applying;
 
   const totalDelta = changes.reduce(
-    (sum, v) => sum + ((v.counted ?? 0) - (v.product?.physicalStock ?? 0)),
+    (sum, v) => sum + (tambah ? (v.counted ?? 0) : (v.counted ?? 0) - (v.product?.physicalStock ?? 0)),
     0,
   ) - missingToZero.reduce((sum, p) => sum + p.physicalStock, 0);
 
@@ -185,7 +193,7 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
     try {
       for (let i = 0; i < applyRows.length; i += CHUNK_SIZE) {
         const chunk = applyRows.slice(i, i + CHUNK_SIZE);
-        const res = await applyStockOpname({ rows: chunk, note });
+        const res = await applyStockOpname({ rows: chunk, note, mode });
         if (res.results && res.results.length > 0) all.push(...res.results);
         else if (!res.success) {
           chunk.forEach((c) => all.push({ label: c.label, sku: '', ok: false, error: res.error || 'Gagal diproses.' }));
@@ -206,6 +214,7 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
     setText('');
     setOverrides({});
     setZeroMissing(false);
+    setMode('SET');
     setBlankAsZero(false);
     setNote('');
     setResults(null);
@@ -225,7 +234,8 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
         <Header />
         <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
           <div className="flex items-center gap-2 text-emerald-700 font-bold">
-            <CheckCircle2 className="w-5 h-5" /> {ok.length} produk berhasil disamakan dengan hasil hitung
+            <CheckCircle2 className="w-5 h-5" />{' '}
+            {tambah ? `${ok.length} produk berhasil ditambah stoknya` : `${ok.length} produk berhasil disamakan dengan hasil hitung`}
           </div>
           {ok.filter((r) => r.created).length > 0 && (
             <p className="text-sm text-slate-600">{ok.filter((r) => r.created).length} produk baru dibuat di Master.</p>
@@ -249,11 +259,17 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
                   {r.label}: {r.error}
                 </div>
               ))}
-              <div className="text-xs text-rose-600">Aman diulang: tempel daftar yang sama lagi, produk yang sudah sesuai tidak diubah dua kali.</div>
+              {tambah ? (
+                <div className="text-xs text-rose-600">
+                  JANGAN tempel ulang seluruh daftar, nanti yang sudah berhasil ikut bertambah dua kali. Cek Riwayat Stok, lalu tempel hanya baris yang gagal.
+                </div>
+              ) : (
+                <div className="text-xs text-rose-600">Aman diulang: tempel daftar yang sama lagi, produk yang sudah sesuai tidak diubah dua kali.</div>
+              )}
             </div>
           )}
           {fatal && <div className="text-sm text-rose-700">{fatal}</div>}
-          <p className="text-xs text-slate-500">Semua perubahan tercatat di Riwayat Stok dengan catatan &quot;Stok opname&quot;. Keuangan tidak diubah.</p>
+          <p className="text-xs text-slate-500">Semua perubahan tercatat di Riwayat Stok dengan catatan &quot;{tambah ? 'Tambah stok (opname)' : 'Stok opname'}&quot;. Keuangan tidak diubah.</p>
           <button
             type="button"
             onClick={reset}
@@ -272,7 +288,28 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
 
       {/* Input */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3">
-        <label className="text-sm font-bold text-slate-700 block">Tempel hasil hitung fisik</label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setMode('SET')}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold cursor-pointer ${!tambah ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+          >
+            Ganti stok (hasil hitung)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('ADD')}
+            className={`px-3 py-1.5 rounded-xl border text-xs font-bold cursor-pointer ${tambah ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+          >
+            Tambah ke stok
+          </button>
+        </div>
+        {tambah && (
+          <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+            Mode <strong>Tambah</strong>: jumlah yang kamu tempel <strong>ditambahkan</strong> ke stok sistem (sistem 5, tempel 3, jadi 8). Jangan diterapkan dua kali untuk daftar yang sama.
+          </div>
+        )}
+        <label className="text-sm font-bold text-slate-700 block">{tambah ? 'Tempel jumlah yang mau ditambahkan' : 'Tempel hasil hitung fisik'}</label>
         <p className="text-xs text-slate-500">
           Salin dari Excel / Google Sheets. Kolom: <strong>Nama, Motif/Koleksi, Jumlah</strong> (hijab motif) atau
           <strong> Kode, Jumlah</strong> (Paris Japan, mis. <span className="font-mono">12-2 = 5</span>). Jumlah yang
@@ -373,7 +410,7 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
                       <th className="text-left px-5 py-2">Produk</th>
                       <th className="text-right px-3 py-2">Sistem</th>
                       <th className="text-right px-3 py-2">Tahan</th>
-                      <th className="text-right px-3 py-2">Hitungan</th>
+                      <th className="text-right px-3 py-2">{tambah ? 'Jadi' : 'Hitungan'}</th>
                       <th className="text-right px-3 py-2">Selisih</th>
                       <th className="text-left px-5 py-2">Catatan</th>
                     </tr>
@@ -382,7 +419,8 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
                     {changes.map((v) => {
                       const before = v.product?.physicalStock ?? 0;
                       const reserved = v.product?.reservedStock ?? 0;
-                      const counted = v.counted ?? 0;
+                      const added = v.counted ?? 0;
+                      const counted = tambah ? before + added : added;
                       const diff = counted - before;
                       return (
                         <tr key={v.key}>
@@ -468,7 +506,7 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
+          <div className={`bg-white rounded-2xl border border-slate-200 p-4 space-y-2 ${tambah ? 'hidden' : ''}`}>
             <label className="flex items-center gap-2 text-sm font-bold text-slate-800 cursor-pointer select-none">
               <input type="checkbox" checked={zeroMissing} onChange={(e) => setZeroMissing(e.target.checked)} />
               Produk di Master yang tidak ada di daftar dianggap 0 ({missing.length} produk)
@@ -516,14 +554,23 @@ export default function StockOpnameClient({ products }: { products: ProductItem[
       {confirmOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-100 p-6 space-y-4">
-            <h3 className="text-lg font-bold text-slate-800">Terapkan stok opname?</h3>
+            <h3 className="text-lg font-bold text-slate-800">{tambah ? 'Tambah ke stok?' : 'Terapkan stok opname?'}</h3>
             <div className="text-sm text-slate-600 space-y-2">
               <p>
-                Stok fisik <strong>{applyRows.length} produk</strong> akan diubah menjadi hasil hitungmu (total selisih{' '}
-                <strong>{totalDelta > 0 ? `+${totalDelta}` : totalDelta} pcs</strong>).
+                {tambah ? (
+                  <>
+                    Stok fisik <strong>{applyRows.length} produk</strong> akan <strong>ditambah</strong> (total{' '}
+                    <strong>+{totalDelta} pcs</strong>).
+                  </>
+                ) : (
+                  <>
+                    Stok fisik <strong>{applyRows.length} produk</strong> akan diubah menjadi hasil hitungmu (total selisih{' '}
+                    <strong>{totalDelta > 0 ? `+${totalDelta}` : totalDelta} pcs</strong>).
+                  </>
+                )}
               </p>
               <p>
-                Selisih dicatat di Riwayat Stok. Kalau stok fisik tidak cukup untuk PO yang sudah ditahan, PO terbaru kembali menunggu. Keuangan tidak berubah.
+                Perubahan dicatat di Riwayat Stok. {tambah ? 'Stok baru otomatis dibagikan ke PO yang menunggu (yang paling lama dulu).' : 'Kalau stok fisik tidak cukup untuk PO yang sudah ditahan, PO terbaru kembali menunggu.'} Keuangan tidak berubah.
               </p>
               <p className="text-rose-600 font-semibold">Tidak ada tombol urungkan, jadi pastikan pratinjau sudah benar.</p>
             </div>

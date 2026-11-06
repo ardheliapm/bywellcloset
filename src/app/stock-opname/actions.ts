@@ -53,7 +53,9 @@ function todayLabel(): string {
  * - Tidak mengubah Keuangan.
  * Diproses per produk (satu transaksi per produk) dan aman diulang: hasil hitung yang sama tidak membuat selisih baru.
  */
-export async function applyStockOpname(payload: { rows: OpnameApplyRow[]; note?: string }) {
+export async function applyStockOpname(payload: { rows: OpnameApplyRow[]; note?: string; mode?: 'SET' | 'ADD' }) {
+  // SET = ganti stok dengan hasil hitung (aman diulang). ADD = tambahkan jumlah ke stok sekarang (TIDAK aman diulang).
+  const mode = payload?.mode === 'ADD' ? 'ADD' : 'SET';
   const rows = payload?.rows ?? [];
   if (rows.length === 0) return { success: false, error: 'Tidak ada baris untuk diterapkan.', results: [] };
   if (rows.length > 40) return { success: false, error: 'Maksimal 40 produk per proses.', results: [] };
@@ -61,7 +63,7 @@ export async function applyStockOpname(payload: { rows: OpnameApplyRow[]; note?:
   const seenIds = new Set<string>();
   const seenSkus = new Set<string>();
   for (const r of rows) {
-    if (!Number.isInteger(r.countedQty) || r.countedQty < 0 || r.countedQty > 100000) {
+    if (!Number.isInteger(r.countedQty) || r.countedQty < (mode === 'ADD' ? 1 : 0) || r.countedQty > 100000) {
       return { success: false, error: `Jumlah untuk "${r.label}" tidak valid.`, results: [] };
     }
     if (!!r.productId === !!r.create) {
@@ -112,15 +114,16 @@ export async function applyStockOpname(payload: { rows: OpnameApplyRow[]; note?:
           }
 
           const before = product.physicalStock;
-          const diff = r.countedQty - before;
+          const target = mode === 'ADD' ? before + r.countedQty : r.countedQty;
+          const diff = target - before;
           if (diff !== 0) {
-            await tx.product.update({ where: { id: product.id }, data: { physicalStock: r.countedQty } });
+            await tx.product.update({ where: { id: product.id }, data: { physicalStock: target } });
             await tx.stockTransaction.create({
               data: {
                 productId: product.id,
                 type: diff > 0 ? 'ADJUSTMENT_IN' : 'ADJUSTMENT_OUT',
                 quantity: Math.abs(diff),
-                notes: `Stok opname ${dateLabel}: ${before} -> ${r.countedQty} (${diff > 0 ? `+${diff}` : diff} pcs)${extra}`,
+                notes: `${mode === 'ADD' ? 'Tambah stok (opname)' : 'Stok opname'} ${dateLabel}: ${before} -> ${target} (${diff > 0 ? `+${diff}` : diff} pcs)${extra}`,
               },
             });
           }
@@ -132,7 +135,7 @@ export async function applyStockOpname(payload: { rows: OpnameApplyRow[]; note?:
             ok: true,
             created,
             before,
-            after: r.countedQty,
+            after: target,
             releasedFromPo: rec.releasedFromPo,
             allocatedToPo: rec.allocatedToPo,
             holdExceedsPhysical: rec.holdExceedsPhysical,
