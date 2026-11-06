@@ -22,6 +22,7 @@ import {
   Boxes,
   Edit3,
   RefreshCw,
+  PackageCheck,
 } from 'lucide-react';
 import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder, resyncAllPreOrderStock } from './actions';
 import { ProductItem } from '../products/actions';
@@ -30,6 +31,7 @@ import PreOrderInvoiceModal from './PreOrderInvoiceModal';
 import ShipPreOrderModal from './ShipPreOrderModal';
 import EditPreOrderModal from './EditPreOrderModal';
 import AddPreOrderItemsModal from './AddPreOrderItemsModal';
+import SettlePreOrdersModal from './SettlePreOrdersModal';
 
 interface PreOrdersClientProps {
   initialPreOrders: PreOrderRecord[];
@@ -51,6 +53,10 @@ export default function PreOrdersClient({
   const [selectedPoForShip, setSelectedPoForShip] = useState<PreOrderRecord | null>(null);
   const [selectedPoForEdit, setSelectedPoForEdit] = useState<PreOrderRecord | null>(null);
   const [selectedPoForAddItems, setSelectedPoForAddItems] = useState<PreOrderRecord | null>(null);
+  const [settleModal, setSettleModal] = useState<{ isOpen: boolean; poId: string | null }>({
+    isOpen: false,
+    poId: null,
+  });
 
   // Confirmation dialog
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -286,6 +292,16 @@ export default function PreOrdersClient({
           >
             <RefreshCw className={`w-3.5 h-3.5 text-indigo-600 ${isResyncing ? 'animate-spin' : ''}`} />
             <span>{isResyncing ? 'Menyinkronkan...' : 'Sinkronkan Alokasi'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSettleModal({ isOpen: true, poId: null })}
+            className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-2 transition-colors cursor-pointer"
+            title="Selesaikan PO yang barangnya sudah terkirim tapi masih nyangkut di antrean"
+          >
+            <PackageCheck className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Selesaikan PO Nyangkut</span>
           </button>
 
           <button
@@ -669,6 +685,18 @@ export default function PreOrdersClient({
                             </button>
                           )}
 
+                          {/* Selesaikan (sudah terkirim di luar sistem) */}
+                          {po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
+                            <button
+                              type="button"
+                              onClick={() => setSettleModal({ isOpen: true, poId: po.id })}
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                              title="Selesaikan PO: barang sudah terkirim semua"
+                            >
+                              <PackageCheck className="w-4 h-4" />
+                            </button>
+                          )}
+
                           {/* Batalkan */}
                           {po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
                             <button
@@ -720,6 +748,13 @@ export default function PreOrdersClient({
         isOpen={Boolean(selectedPoForShip)}
         onClose={() => setSelectedPoForShip(null)}
         preOrder={selectedPoForShip}
+      />
+
+      <SettlePreOrdersModal
+        isOpen={settleModal.isOpen}
+        onClose={() => setSettleModal({ isOpen: false, poId: null })}
+        preOrders={initialPreOrders}
+        initialSelectedId={settleModal.poId}
       />
 
       <EditPreOrderModal

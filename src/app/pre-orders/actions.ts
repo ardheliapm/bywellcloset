@@ -432,6 +432,112 @@ export async function markPreOrderAsPaid(poId: string, paymentNotes?: string, cu
   }
 }
 
+// 4b. Selesaikan PO yang sudah terkirim di dunia nyata tapi masih "nyangkut" di sistem
+// (misalnya karena nama/SKU item tidak terdeteksi sehingga tidak pernah ready).
+// - TIDAK mencatat pemasukan ke Keuangan dan TIDAK mengubah status pembayaran.
+// - Item yang sudah ready tapi belum dikirim: stok dikurangi seperti pengiriman biasa.
+// - Item yang belum ready: tidak menyentuh stok sama sekali (barang keluar dari luar sistem,
+//   selisihnya dibereskan lewat hitung fisik / stok opname).
+export async function settlePreOrdersAsShipped(poIds: string[]) {
+  const ids = Array.from(new Set((poIds || []).filter((id) => typeof id === 'string' && id)));
+  if (ids.length === 0) {
+    return { success: false, error: 'Pilih minimal 1 Pre-Order.' };
+  }
+  if (ids.length > 200) {
+    return { success: false, error: 'Maksimal 200 Pre-Order sekaligus.' };
+  }
+
+  let settled = 0;
+  const skipped: string[] = [];
+  const failed: string[] = [];
+
+  for (const poId of ids) {
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const po = await tx.preOrder.findUnique({
+            where: { id: poId },
+            include: { items: true },
+          });
+
+          if (!po) return { ok: false as const, label: poId };
+          if (po.status === 'CANCELLED' || po.status === 'SHIPPED') {
+            return { ok: false as const, label: `#${po.poNumber}` };
+          }
+
+          for (const it of po.items) {
+            const heldQty = Math.max(0, it.quantityFulfilled - it.quantityShipped);
+
+            if (heldQty > 0 && it.productId) {
+              await tx.product.update({
+                where: { id: it.productId },
+                data: {
+                  physicalStock: { decrement: heldQty },
+                  reservedStock: { decrement: heldQty },
+                },
+              });
+
+              await tx.stockTransaction.create({
+                data: {
+                  productId: it.productId,
+                  type: 'ADJUSTMENT_OUT',
+                  quantity: heldQty,
+                  notes: `Pengiriman PO #${po.poNumber} (${po.customerName}) - diselesaikan manual`,
+                },
+              });
+            }
+
+            await tx.preOrderItem.update({
+              where: { id: it.id },
+              data: {
+                quantityFulfilled: Math.max(it.quantityFulfilled, it.quantityOrdered),
+                quantityShipped: Math.max(it.quantityShipped, it.quantityOrdered),
+              },
+            });
+          }
+
+          await tx.preOrder.update({
+            where: { id: poId },
+            data: {
+              status: 'SHIPPED',
+              shippedAt: new Date(),
+            },
+          });
+
+          return { ok: true as const, label: `#${po.poNumber}` };
+        },
+        { maxWait: 15000, timeout: 30000 }
+      );
+
+      if (result.ok) settled += 1;
+      else skipped.push(result.label);
+    } catch (error: any) {
+      console.error('Error settling pre-order:', poId, error);
+      failed.push(poId);
+    }
+  }
+
+  revalidatePath('/pre-orders');
+  revalidatePath('/products');
+  revalidatePath('/orders');
+  revalidatePath('/');
+
+  if (settled === 0) {
+    return {
+      success: false,
+      error:
+        failed.length > 0
+          ? 'Gagal menyelesaikan Pre-Order. Coba lagi beberapa saat.'
+          : 'Tidak ada Pre-Order yang bisa diselesaikan (sudah dikirim atau dibatalkan).',
+      settled,
+      skipped,
+      failed,
+    };
+  }
+
+  return { success: true, settled, skipped, failed };
+}
+
 // 4. Cancel Pre-Order (Release any reserved stock back to warehouse)
 export async function cancelPreOrder(poId: string) {
   try {
