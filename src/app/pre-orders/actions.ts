@@ -3,6 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { isProductMatchItem, allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
+import { reconcileProductAllocation } from '@/lib/opnameAllocation';
 import {
   findProductMasterType,
   calculateProductPrice,
@@ -1185,3 +1186,73 @@ export async function resyncAllPreOrderStock() {
 
 
 
+
+// 12. Tautkan item PO yang belum terhubung (nama/kode salah ketik) ke produk di Master
+export interface LinkPreOrderItemInput {
+  itemId: string;
+  productId: string;
+}
+
+export interface LinkPreOrderItemResult {
+  itemId: string;
+  ok: boolean;
+  sku?: string;
+  allocated?: number;
+  error?: string;
+}
+
+/**
+ * Menghubungkan item PO ke produk Master. SKU/nama item disamakan dengan produk, lalu stok bebas
+ * produk itu dibagikan ke antrean PO (terlama dulu) lewat rekonsiliasi yang sama dengan Stok Opname.
+ * Hanya untuk item PO aktif yang belum punya stok siap / belum dikirim. Tidak mengubah Keuangan.
+ */
+export async function linkPreOrderItemsToProducts(links: LinkPreOrderItemInput[]) {
+  if (!links || links.length === 0) return { success: false, error: 'Tidak ada item yang dipilih.', results: [] as LinkPreOrderItemResult[] };
+  if (links.length > 30) return { success: false, error: 'Maksimal 30 item per proses.', results: [] as LinkPreOrderItemResult[] };
+  const seen = new Set<string>();
+  for (const l of links) {
+    if (!l.itemId || !l.productId) return { success: false, error: 'Data tautan tidak lengkap.', results: [] as LinkPreOrderItemResult[] };
+    if (seen.has(l.itemId)) return { success: false, error: 'Ada item yang dipilih dua kali.', results: [] as LinkPreOrderItemResult[] };
+    seen.add(l.itemId);
+  }
+
+  const results: LinkPreOrderItemResult[] = [];
+  for (const l of links) {
+    try {
+      const out = await prisma.$transaction(
+        async (tx) => {
+          const item = await tx.preOrderItem.findUnique({ where: { id: l.itemId }, include: { preOrder: true } });
+          if (!item) throw new Error('Item PO tidak ditemukan.');
+          if (item.preOrder.status === 'CANCELLED' || item.preOrder.status === 'SHIPPED') {
+            throw new Error(`PO #${item.preOrder.poNumber} sudah ${item.preOrder.status === 'SHIPPED' ? 'selesai dikirim' : 'dibatalkan'}.`);
+          }
+          if (item.quantityFulfilled > 0 || item.quantityShipped > 0) {
+            throw new Error('Item ini sudah punya stok siap/terkirim, ubah lewat Edit PO.');
+          }
+          const product = await tx.product.findUnique({ where: { id: l.productId } });
+          if (!product) throw new Error('Produk tujuan tidak ditemukan di Master.');
+
+          await tx.preOrderItem.update({
+            where: { id: item.id },
+            data: { productId: product.id, productSku: product.sku, productName: product.name },
+          });
+
+          const rec = await reconcileProductAllocation(tx, product.id);
+          return { sku: product.sku, allocated: rec.allocatedToPo };
+        },
+        { maxWait: 15000, timeout: 30000 },
+      );
+      results.push({ itemId: l.itemId, ok: true, sku: out.sku, allocated: out.allocated });
+    } catch (error: any) {
+      console.error('Error linking pre-order item:', l.itemId, error);
+      results.push({ itemId: l.itemId, ok: false, error: error?.message || 'Gagal menautkan.' });
+    }
+  }
+
+  revalidatePath('/pre-orders');
+  revalidatePath('/products');
+  revalidatePath('/');
+
+  const okCount = results.filter((r) => r.ok).length;
+  return { success: okCount > 0, results, error: okCount === 0 ? 'Semua item gagal ditautkan.' : undefined };
+}

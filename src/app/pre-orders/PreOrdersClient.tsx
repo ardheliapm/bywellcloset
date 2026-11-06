@@ -23,6 +23,8 @@ import {
   Edit3,
   RefreshCw,
   PackageCheck,
+  Link2,
+  ClipboardList,
 } from 'lucide-react';
 import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder, resyncAllPreOrderStock } from './actions';
 import { ProductItem } from '../products/actions';
@@ -32,6 +34,9 @@ import ShipPreOrderModal from './ShipPreOrderModal';
 import EditPreOrderModal from './EditPreOrderModal';
 import AddPreOrderItemsModal from './AddPreOrderItemsModal';
 import SettlePreOrdersModal from './SettlePreOrdersModal';
+import LinkPreOrderItemsModal from './LinkPreOrderItemsModal';
+import PickingListModal from './PickingListModal';
+import { findLinkableItems } from './linkableItems';
 
 interface PreOrdersClientProps {
   initialPreOrders: PreOrderRecord[];
@@ -71,6 +76,12 @@ export default function PreOrdersClient({
   const [payAmountOption, setPayAmountOption] = useState<'FULL' | 'READY_ONLY'>('FULL');
   const [actionLoading, setActionLoading] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
+  const [isLinkOpen, setIsLinkOpen] = useState(false);
+  const [isPickingOpen, setIsPickingOpen] = useState(false);
+  const linkableCount = useMemo(
+    () => findLinkableItems(initialPreOrders, products.filter((p) => p.isActive)).length,
+    [initialPreOrders, products],
+  );
 
   const handleResync = async () => {
     setIsResyncing(true);
@@ -302,6 +313,28 @@ export default function PreOrdersClient({
           >
             <PackageCheck className="w-3.5 h-3.5 text-indigo-600" />
             <span>Selesaikan PO Nyangkut</span>
+          </button>
+
+          {linkableCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsLinkOpen(true)}
+              className="px-3.5 py-2.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs shadow-2xs flex items-center gap-2 transition-colors cursor-pointer"
+              title="Hubungkan item PO yang namanya tidak dikenali ke produk yang benar"
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              <span>Tautkan Produk ({linkableCount})</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setIsPickingOpen(true)}
+            className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs shadow-2xs flex items-center gap-2 transition-colors cursor-pointer"
+            title="Daftar per customer: yang sudah siap disisihkan dan yang masih menunggu"
+          >
+            <ClipboardList className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Daftar Sisih</span>
           </button>
 
           <button
@@ -756,6 +789,9 @@ export default function PreOrdersClient({
         preOrders={initialPreOrders}
         initialSelectedId={settleModal.poId}
       />
+
+      <LinkPreOrderItemsModal isOpen={isLinkOpen} onClose={() => setIsLinkOpen(false)} preOrders={initialPreOrders} products={products} />
+      <PickingListModal isOpen={isPickingOpen} onClose={() => setIsPickingOpen(false)} preOrders={initialPreOrders} />
 
       <EditPreOrderModal
         isOpen={Boolean(selectedPoForEdit)}
