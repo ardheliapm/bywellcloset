@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useTransition } from 'react';
+import React, { useState, useEffect, useTransition, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   X,
@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { ProductItem } from '../products/actions';
 import { createPreOrder } from './actions';
+import PoCheckPanel from './PoCheckPanel';
+import { buildPoPreview } from '@/lib/poPreview';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -84,6 +86,23 @@ SPARK FLOWER(1)`
 
   // Open suggestion dropdown for a specific row index in manual mode
   const [activeDropdownIndex, setActiveDropdownIndex] = useState<number | null>(null);
+
+  // Pratinjau pemeriksaan penamaan sebelum PO disimpan
+  const previewLines = useMemo(
+    () =>
+      buildPoPreview(
+        items.filter(
+          (it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0
+        ),
+        products
+      ),
+    [items, products]
+  );
+
+  const handlePickSuggestion = (itemId: string, prod: ProductItem) => {
+    const idx = items.findIndex((it) => it.id === itemId);
+    if (idx >= 0) handleSelectProduct(idx, prod);
+  };
 
   // Reset or initialize on open
   useEffect(() => {
@@ -529,6 +548,12 @@ SPARK FLOWER(1)`
         }
         activeItems = parsed.items;
         setItems(parsed.items);
+        setHasParsedFromPaste(true);
+        // Klik pertama hanya membaca teks; periksa pratinjau dulu, baru klik simpan lagi
+        if (parsed.items.length > 0) {
+          setSuccessMsg('Teks sudah dibaca. Periksa daftar di bawah, lalu klik Simpan sekali lagi.');
+          return;
+        }
       }
     }
 
@@ -544,6 +569,15 @@ SPARK FLOWER(1)`
     if (validItems.length === 0) {
       setError('Silakan tentukan minimal 1 nama produk/motif untuk dicatat PO.');
       return;
+    }
+
+    const unknown = buildPoPreview(validItems, products).filter((l) => !l.product);
+    if (unknown.length > 0) {
+      const names = unknown.map((l) => `- ${l.typed} (${l.quantity} pcs)`).join('\n');
+      const ok = window.confirm(
+        `${unknown.length} produk tidak ada di Master Produk:\n${names}\n\nPO tetap disimpan tapi item ini tidak dapat stok otomatis sampai ditautkan. Lanjut simpan?`
+      );
+      if (!ok) return;
     }
 
     setLoading(true);
@@ -1039,6 +1073,7 @@ SPARK FLOWER(1)`
               </div>
             </form>
           )}
+          <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} />
         </div>
 
         {/* Footer */}
