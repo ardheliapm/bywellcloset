@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import { ProductItem } from '../products/actions';
 import { PreOrderRecord, addItemsToPreOrder, AddPreOrderItemInput } from './actions';
+import PoCheckPanel from './PoCheckPanel';
+import { buildPoPreview } from '@/lib/poPreview';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -391,6 +393,39 @@ export default function AddPreOrderItemsModal({
     0
   );
 
+  const previewLines = useMemo(
+    () =>
+      buildPoPreview(
+        items.filter((it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0),
+        products
+      ),
+    [items, products]
+  );
+
+  const handlePickSuggestion = (itemId: string, prod: ProductItem) => {
+    const row = items.find((it) => it.id === itemId);
+    if (!row) return;
+    const name = prod.name.toUpperCase();
+    const catName = name.includes('PARIS') || prod.sku.toUpperCase().startsWith('PJ') ? 'PARIS JAPAN' : name.includes('BELLA') ? 'BELLA SQUARE' : 'BABY TRYSPAN';
+    setItems(
+      syncPricesWithTiers(
+        items.map((it) =>
+          it.id !== itemId
+            ? it
+            : {
+                ...it,
+                productId: prod.id,
+                productSku: prod.sku,
+                productName: `${prod.name} ${prod.motif ? `(${prod.motif})` : ''}`.trim(),
+                categoryName: catName,
+                isCustomPrice: false,
+                price: prod.sellingPrice || it.price,
+              }
+        )
+      )
+    );
+  };
+
   // Submit to server
   const handleSubmit = async () => {
     if (items.length === 0) {
@@ -402,6 +437,15 @@ export default function AddPreOrderItemsModal({
     if (invalid) {
       setError('Pastikan semua baris memiliki Kode / Nama SKU produk.');
       return;
+    }
+
+    const unknown = buildPoPreview(items, products).filter((l) => !l.product);
+    if (unknown.length > 0) {
+      const names = unknown.map((l) => `- ${l.typed} (${l.quantity} pcs)`).join('\n');
+      const ok = window.confirm(
+        `${unknown.length} produk tidak ada di Master Produk:\n${names}\n\nItem tetap disimpan tapi tidak dapat stok otomatis sampai ditautkan. Lanjut simpan?`
+      );
+      if (!ok) return;
     }
 
     setLoading(true);
@@ -712,6 +756,9 @@ export default function AddPreOrderItemsModal({
                     })}
                   </div>
                 )}
+              </div>
+              <div className="px-6 pb-4">
+                <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} />
               </div>
             </div>
 
