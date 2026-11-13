@@ -26,6 +26,7 @@ import {
   Link2,
   ClipboardList,
 } from 'lucide-react';
+import { paidOf, remainingOf, isFullyPaid, readyRemaining } from '@/lib/poPayment';
 import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder, resyncAllPreOrderStock } from './actions';
 import { ProductItem } from '../products/actions';
 import CreatePreOrderModal from './CreatePreOrderModal';
@@ -73,7 +74,7 @@ export default function PreOrdersClient({
     type: 'PAY',
     po: null,
   });
-  const [payAmountOption, setPayAmountOption] = useState<'FULL' | 'READY_ONLY'>('FULL');
+  const [payAmountInput, setPayAmountInput] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
   const [isLinkOpen, setIsLinkOpen] = useState(false);
@@ -172,7 +173,7 @@ export default function PreOrdersClient({
     () =>
       dateFiltered.filter((po) => {
         if (po.status === 'CANCELLED' || po.status === 'SHIPPED') return false;
-        if (po.paymentStatus !== 'PAID') return false;
+        if (paidOf(po) <= 0) return false;
         const readyPcs = po.items.reduce(
           (sub, it) => sub + Math.max(0, it.quantityFulfilled - it.quantityShipped),
           0
@@ -218,7 +219,7 @@ export default function PreOrdersClient({
       let matchesStatus = true;
       if (statusFilter === 'READY_TO_PACK') {
         if (po.status === 'CANCELLED' || po.status === 'SHIPPED') matchesStatus = false;
-        else if (po.paymentStatus !== 'PAID') matchesStatus = false;
+        else if (paidOf(po) <= 0) matchesStatus = false;
         else {
           const readyPcs = po.items.reduce(
             (sub, it) => sub + Math.max(0, it.quantityFulfilled - it.quantityShipped),
@@ -248,15 +249,10 @@ export default function PreOrdersClient({
 
     try {
       if (confirmDialog.type === 'PAY') {
-        const readyNominal = confirmDialog.po.items.reduce(
-          (acc, it) => acc + it.price * Math.max(0, it.quantityFulfilled - it.quantityShipped),
-          0
-        );
-        const customAmount =
-          payAmountOption === 'READY_ONLY' && readyNominal > 0 ? readyNominal : undefined;
+        const customAmount = Math.floor(Number(payAmountInput.replace(/[^0-9]/g, '')) || 0);
         const res = await markPreOrderAsPaid(confirmDialog.po.id, undefined, customAmount);
         if (!res.success) {
-          alert(res.error || 'Gagal menandai Pre-Order lunas.');
+          alert(res.error || 'Gagal mencatat pembayaran.');
         }
       } else if (confirmDialog.type === 'CANCEL') {
         const res = await cancelPreOrder(confirmDialog.po.id);
@@ -509,7 +505,9 @@ export default function PreOrdersClient({
                   const totalPcsShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
                   const readyToShipPcs = totalPcsFulfilled - totalPcsShipped;
 
-                  const isPaid = po.paymentStatus === 'PAID' || po.status === 'SHIPPED';
+                  const paid = paidOf(po);
+                  const remaining = remainingOf(po);
+                  const isPaid = isFullyPaid(po);
 
                   return (
                     <tr key={po.id} className="hover:bg-slate-50/60 transition-colors">
@@ -596,6 +594,12 @@ export default function PreOrdersClient({
                         <div className="text-[11px] text-slate-400 font-normal">
                           {totalPcsOrdered} pcs total
                         </div>
+                        {po.status !== 'CANCELLED' && paid > 0 && remaining > 0 && (
+                          <div className="text-[11px] font-semibold mt-0.5 text-slate-500">
+                            Dibayar {formatRupiah(paid)} ·{' '}
+                            <span className="text-amber-700">Sisa {formatRupiah(remaining)}</span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Status Badge */}
@@ -644,6 +648,10 @@ export default function PreOrdersClient({
                             isPaid ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs">
                                 <Check className="w-2.5 h-2.5 text-emerald-600" /> Lunas
+                              </span>
+                            ) : paid > 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                Bayar Sebagian
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100/70 text-amber-800 border border-amber-200">
@@ -696,18 +704,19 @@ export default function PreOrdersClient({
                             <button
                               type="button"
                               onClick={() => {
-                                setPayAmountOption('FULL');
+                                const suggest = readyRemaining(po, po.items) || remaining;
+                                setPayAmountInput(String(suggest));
                                 setConfirmDialog({ isOpen: true, type: 'PAY', po });
                               }}
                               className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
-                              title="Tandai Pre-Order ini telah dibayar & catat pemasukan keuangan"
+                              title="Catat pembayaran (bisa dicicil) & pemasukan keuangan"
                             >
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Bayar
+                              <CheckCircle2 className="w-3.5 h-3.5" /> {paid > 0 ? 'Bayar Lagi' : 'Bayar'}
                             </button>
                           )}
 
-                          {/* Kirim Barang Ready (HANYA MUNCUL JIKA SUDAH BAYAR / LUNAS) */}
-                          {isPaid && readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
+                          {/* Kirim Barang Ready (boleh kirim sebagian; modal kirim memberi pengingat kalau pembayaran belum penuh) */}
+                          {readyToShipPcs > 0 && po.status !== 'CANCELLED' && po.status !== 'SHIPPED' && (
                             <button
                               type="button"
                               onClick={() => setSelectedPoForShip(po)}
@@ -834,7 +843,7 @@ export default function PreOrdersClient({
 
               <h3 className="text-lg font-bold text-slate-800">
                 {confirmDialog.type === 'PAY'
-                  ? 'Konfirmasi Pembayaran Pre-Order'
+                  ? 'Catat Pembayaran'
                   : confirmDialog.type === 'CANCEL'
                   ? 'Batalkan Pre-Order'
                   : 'Hapus Pre-Order Permanen'}
@@ -843,80 +852,79 @@ export default function PreOrdersClient({
               <div className="text-sm text-slate-500">
                 {confirmDialog.type === 'PAY' ? (
                   (() => {
-                    const readyPcs = confirmDialog.po.items.reduce(
-                      (acc, it) => acc + Math.max(0, it.quantityFulfilled - it.quantityShipped),
-                      0
-                    );
-                    const totalOrderedPcs = confirmDialog.po.items.reduce(
-                      (acc, it) => acc + it.quantityOrdered,
-                      0
-                    );
-                    const readyNominal = confirmDialog.po.items.reduce(
-                      (acc, it) => acc + it.price * Math.max(0, it.quantityFulfilled - it.quantityShipped),
-                      0
-                    );
-                    const isPartialAvailable = readyPcs > 0 && readyPcs < totalOrderedPcs;
-
+                    const po = confirmDialog.po;
+                    const paidNow = paidOf(po);
+                    const remainingNow = remainingOf(po);
+                    const readyNeed = readyRemaining(po, po.items);
+                    const amountNum = Math.floor(Number(payAmountInput.replace(/[^0-9]/g, '')) || 0);
+                    const tooMuch = amountNum > remainingNow;
                     return (
                       <div className="space-y-3 text-left bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 text-xs">
                         <div className="flex justify-between">
                           <span className="text-slate-500">No. PO:</span>
-                          <strong className="text-indigo-900 font-mono">#{confirmDialog.po.poNumber}</strong>
+                          <strong className="text-indigo-900 font-mono">#{po.poNumber}</strong>
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-500">Customer:</span>
-                          <strong className="text-slate-800">{confirmDialog.po.customerName}</strong>
+                          <strong className="text-slate-800">{po.customerName}</strong>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-200 text-center">
+                          <div className="bg-white border border-slate-200 rounded-lg p-2">
+                            <div className="text-[10px] text-slate-500 font-semibold">Total</div>
+                            <div className="font-bold text-slate-900">{formatRupiah(po.totalAmount)}</div>
+                          </div>
+                          <div className="bg-white border border-slate-200 rounded-lg p-2">
+                            <div className="text-[10px] text-slate-500 font-semibold">Dibayar</div>
+                            <div className="font-bold text-slate-900">{formatRupiah(paidNow)}</div>
+                          </div>
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2">
+                            <div className="text-[10px] text-amber-800 font-semibold">Sisa</div>
+                            <div className="font-bold text-amber-800">{formatRupiah(remainingNow)}</div>
+                          </div>
                         </div>
 
-                        {isPartialAvailable ? (
-                          <div className="space-y-2 pt-2 border-t border-slate-200">
-                            <label className="font-bold text-slate-700 block">
-                              Pilih Nominal Pembayaran:
-                            </label>
-                            <label className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors ${payAmountOption === 'READY_ONLY' ? 'bg-indigo-50/70 border-indigo-300' : 'bg-white border-slate-200'}`}>
-                              <input
-                                type="radio"
-                                name="payOption"
-                                checked={payAmountOption === 'READY_ONLY'}
-                                onChange={() => setPayAmountOption('READY_ONLY')}
-                                className="mt-0.5"
-                              />
-                              <div>
-                                <div className="font-bold text-slate-900">
-                                  Bayar Parsial Barang Ready Saja: <span className="text-indigo-700">{formatRupiah(readyNominal)}</span>
-                                </div>
-                                <div className="text-[11px] text-slate-500">
-                                  Hanya {readyPcs} pcs barang yang sudah siap dikirim.
-                                </div>
-                              </div>
-                            </label>
-                            <label className={`flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors ${payAmountOption === 'FULL' ? 'bg-emerald-50/70 border-emerald-300' : 'bg-white border-slate-200'}`}>
-                              <input
-                                type="radio"
-                                name="payOption"
-                                checked={payAmountOption === 'FULL'}
-                                onChange={() => setPayAmountOption('FULL')}
-                                className="mt-0.5"
-                              />
-                              <div>
-                                <div className="font-bold text-slate-900">
-                                  Bayar Penuh Seluruh PO: <span className="text-emerald-700">{formatRupiah(confirmDialog.po.totalAmount)}</span>
-                                </div>
-                                <div className="text-[11px] text-slate-500">
-                                  Total semua pesanan ({totalOrderedPcs} pcs).
-                                </div>
-                              </div>
-                            </label>
+                        <div className="space-y-1.5">
+                          <div className="font-bold text-slate-700">Pilih cepat:</div>
+                          <div className="flex flex-wrap gap-2">
+                            {readyNeed > 0 && readyNeed < remainingNow && (
+                              <button
+                                type="button"
+                                onClick={() => setPayAmountInput(String(readyNeed))}
+                                className="px-2.5 py-1.5 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-900 font-semibold cursor-pointer"
+                              >
+                                Lunasi bagian yang siap · {formatRupiah(readyNeed)}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setPayAmountInput(String(remainingNow))}
+                              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 font-semibold cursor-pointer"
+                            >
+                              Lunasi semua · {formatRupiah(remainingNow)}
+                            </button>
                           </div>
-                        ) : (
-                          <div className="flex justify-between border-t border-slate-200 pt-2">
-                            <span className="text-slate-500">Total Tagihan:</span>
-                            <strong className="text-emerald-700 font-bold">{formatRupiah(confirmDialog.po.totalAmount)}</strong>
-                          </div>
-                        )}
+                        </div>
 
+                        <label className="block space-y-1">
+                          <span className="font-bold text-slate-700">Jumlah dibayar sekarang (Rp)</span>
+                          <input
+                            inputMode="numeric"
+                            value={payAmountInput}
+                            onChange={(e) => setPayAmountInput(e.target.value.replace(/[^0-9]/g, ''))}
+                            className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm font-bold text-slate-900"
+                          />
+                        </label>
+                        {tooMuch && (
+                          <p className="text-[11px] font-semibold text-rose-600">Jumlah melebihi sisa tagihan.</p>
+                        )}
+                        {!tooMuch && amountNum > 0 && (
+                          <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1.5">
+                            Setelah ini: dibayar <strong>{formatRupiah(paidNow + amountNum)}</strong>, sisa{' '}
+                            <strong>{formatRupiah(remainingNow - amountNum)}</strong>.
+                          </p>
+                        )}
                         <p className="text-[11px] text-slate-400 pt-1 border-t border-slate-200">
-                          Tandai PO ini telah dibayar. Pemasukan otomatis tercatat di Laporan Keuangan, dan tombol Kirim akan aktif.
+                          Tanggal pembayaran otomatis hari ini. Pemasukan tercatat di Laporan Keuangan.
                         </p>
                       </div>
                     );
@@ -945,7 +953,14 @@ export default function PreOrdersClient({
 
               <button
                 type="button"
-                disabled={actionLoading}
+                disabled={
+                  actionLoading ||
+                  (confirmDialog.type === 'PAY' &&
+                    (() => {
+                      const n = Math.floor(Number(payAmountInput.replace(/[^0-9]/g, '')) || 0);
+                      return n <= 0 || n > remainingOf(confirmDialog.po!);
+                    })())
+                }
                 onClick={handleExecuteAction}
                 className={`px-5 py-2 rounded-xl text-white text-xs font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer ${
                   confirmDialog.type === 'PAY'
@@ -962,7 +977,7 @@ export default function PreOrdersClient({
                 ) : (
                   <>
                     {confirmDialog.type === 'PAY'
-                      ? 'Ya, Tandai Lunas'
+                      ? 'Simpan Pembayaran'
                       : confirmDialog.type === 'CANCEL'
                       ? 'Ya, Batalkan PO'
                       : 'Ya, Hapus Permanen'}

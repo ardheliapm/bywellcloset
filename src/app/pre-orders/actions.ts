@@ -1,5 +1,6 @@
 'use server';
 
+import { paidOf, remainingOf } from '@/lib/poPayment';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { isProductMatchItem, allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
@@ -40,6 +41,7 @@ export interface PreOrderRecord {
   status: string; // WAITING_STOCK, PARTIAL_READY, READY, PARTIAL_SHIPPED, SHIPPED, CANCELLED
   totalAmount: number;
   paymentStatus: string; // UNPAID, PAID
+  paidAmount: number; // jumlah yang sudah dibayar (bisa dicicil)
   paidAt: Date | null;
   shippedAt: Date | null;
   notes: string | null;
@@ -332,29 +334,15 @@ export async function shipPreOrderItems(
           nextStatus = 'PARTIAL_READY';
         }
 
-        const wasAlreadyPaid = po.paymentStatus === 'PAID';
-
+        // Pembayaran dicatat terpisah lewat "Catat pembayaran" (bisa dicicil). Pengiriman tidak lagi
+        // menandai PO lunas otomatis.
         await tx.preOrder.update({
           where: { id: poId },
           data: {
             status: nextStatus,
             ...(isAllFullyShipped ? { shippedAt: new Date() } : {}),
-            ...(!wasAlreadyPaid ? { paymentStatus: 'PAID', paidAt: new Date() } : {}),
           },
         });
-
-        // 4. Record Finance Income Transaction for this shipment only if not already paid
-        if (!wasAlreadyPaid && shipmentTotalAmount > 0) {
-          await tx.financeTransaction.create({
-            data: {
-              type: 'INCOME',
-              category: 'SALES',
-              amount: shipmentTotalAmount,
-              description: `Pengiriman PO #${po.poNumber} (${po.customerName}) - ${totalPcsShippedNow} pcs${shippingNotes ? ` [${shippingNotes}]` : ''}`,
-              referenceId: po.poNumber,
-            },
-          });
-        }
       },
       { maxWait: 15000, timeout: 30000 }
     );
@@ -372,7 +360,8 @@ export async function shipPreOrderItems(
   }
 }
 
-// 4. Mark Pre-Order as Paid (Tandai Lunas & Catat Pemasukan ke Laporan Keuangan)
+// 4. Catat pembayaran PO. Bisa dicicil berkali-kali; PO baru berstatus PAID kalau total terpenuhi.
+// Tiap pembayaran dicatat sebagai pemasukan di Laporan Keuangan (referenceId = nomor PO).
 export async function markPreOrderAsPaid(poId: string, paymentNotes?: string, customAmount?: number) {
   try {
     const po = await prisma.preOrder.findUnique({
@@ -387,33 +376,40 @@ export async function markPreOrderAsPaid(poId: string, paymentNotes?: string, cu
       return { success: false, error: 'Pre-Order ini sudah dibatalkan.' };
     }
 
-    if (po.paymentStatus === 'PAID') {
-      return { success: false, error: 'Pre-Order ini sudah dalam status Lunas.' };
+    const remaining = remainingOf(po);
+    if (remaining <= 0) {
+      return { success: false, error: 'Pre-Order ini sudah lunas.' };
     }
 
     const payAmount =
-      customAmount !== undefined && customAmount > 0
-        ? Math.floor(customAmount)
-        : Math.max(0, Math.floor(po.totalAmount));
+      customAmount !== undefined && Number.isFinite(customAmount) ? Math.floor(customAmount) : remaining;
+    if (payAmount <= 0) {
+      return { success: false, error: 'Jumlah pembayaran harus lebih dari 0.' };
+    }
+    if (payAmount > remaining) {
+      return { success: false, error: `Jumlah melebihi sisa tagihan (Rp ${remaining.toLocaleString('id-ID')}).` };
+    }
+
+    const newPaid = paidOf(po) + payAmount;
+    const fullyPaid = newPaid >= po.totalAmount;
 
     await prisma.$transaction(
       async (tx) => {
-        // 1. Update PreOrder payment status
         await tx.preOrder.update({
           where: { id: poId },
           data: {
-            paymentStatus: 'PAID',
-            paidAt: new Date(),
+            paidAmount: newPaid,
+            paymentStatus: fullyPaid ? 'PAID' : 'UNPAID',
+            ...(fullyPaid ? { paidAt: new Date() } : {}),
           },
         });
 
-        // 2. Record Finance Income Transaction
         await tx.financeTransaction.create({
           data: {
             type: 'INCOME',
             category: 'SALES',
             amount: payAmount,
-            description: `Pembayaran ${customAmount && customAmount < po.totalAmount ? 'Parsial ' : 'Lunas '}Pre-Order #${po.poNumber} (${po.customerName})${paymentNotes ? ` [${paymentNotes}]` : ''}`,
+            description: `Pembayaran ${fullyPaid ? 'Pelunasan' : 'Sebagian'} Pre-Order #${po.poNumber} (${po.customerName})${paymentNotes ? ` [${paymentNotes}]` : ''}`,
             referenceId: po.poNumber,
           },
         });
@@ -428,8 +424,8 @@ export async function markPreOrderAsPaid(poId: string, paymentNotes?: string, cu
 
     return { success: true };
   } catch (error: any) {
-    console.error('Error marking pre-order as paid:', error);
-    return { success: false, error: error.message || 'Gagal menandai Pre-Order lunas.' };
+    console.error('Error recording pre-order payment:', error);
+    return { success: false, error: error.message || 'Gagal mencatat pembayaran.' };
   }
 }
 
@@ -934,6 +930,8 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
             notes: notes ? notes.trim() : null,
             totalAmount,
             status: nextStatus,
+            paidAmount: paidOf(po),
+            paymentStatus: paidOf(po) >= totalAmount ? 'PAID' : 'UNPAID',
           },
         });
       },
@@ -1072,11 +1070,16 @@ export async function addItemsToPreOrder(
           nextStatus = totalPcsShipped > 0 ? 'PARTIAL_SHIPPED' : 'PARTIAL_READY';
         }
 
+        // Pembayaran yang sudah masuk dikunci dulu (PO lama berstatus PAID dianggap lunas sebelum total naik),
+        // lalu status bayar dihitung ulang terhadap total baru.
+        const paidNow = paidOf(po);
         await tx.preOrder.update({
           where: { id: preOrderId },
           data: {
             totalAmount: newTotalAmount,
             status: nextStatus,
+            paidAmount: paidNow,
+            paymentStatus: paidNow >= newTotalAmount ? 'PAID' : 'UNPAID',
           },
         });
       },

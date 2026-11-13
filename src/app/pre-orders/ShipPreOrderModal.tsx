@@ -12,6 +12,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { PreOrderRecord, shipPreOrderItems, ShipItemInput } from './actions';
+import { paidOf } from '@/lib/poPayment';
 
 interface ShipPreOrderModalProps {
   isOpen: boolean;
@@ -59,6 +60,11 @@ export default function ShipPreOrderModal({
     const q = quantitiesToShip[it.id] || 0;
     return acc + it.price * q;
   }, 0);
+
+  // Pengingat (tidak memblokir): nilai yang sudah dan akan dikirim vs yang sudah dibayar
+  const shippedValueBefore = preOrder.items.reduce((acc, it) => acc + it.price * it.quantityShipped, 0);
+  const paidNow = paidOf(preOrder);
+  const unpaidForShipment = Math.max(0, shippedValueBefore + totalNominalToShip - paidNow);
 
   const handleQtyChange = (itemId: string, val: number, maxQty: number) => {
     setQuantitiesToShip((prev) => ({
@@ -134,6 +140,15 @@ export default function ShipPreOrderModal({
             <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2 animate-in fade-in">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {totalPcsToShip > 0 && unpaidForShipment > 0 && (
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+              Pembayaran belum penuh untuk barang yang dikirim: nilai kirim{' '}
+              <strong>{formatRupiah(shippedValueBefore + totalNominalToShip)}</strong>, sudah dibayar{' '}
+              <strong>{formatRupiah(paidNow)}</strong>, kurang <strong>{formatRupiah(unpaidForShipment)}</strong>. Tetap
+              bisa dikirim; ini hanya pengingat.
             </div>
           )}
 
