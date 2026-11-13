@@ -33,7 +33,8 @@ import PreOrderInvoiceModal from '../pre-orders/PreOrderInvoiceModal';
 import ShipPreOrderModal from '../pre-orders/ShipPreOrderModal';
 import EditPreOrderModal from '../pre-orders/EditPreOrderModal';
 import AddPreOrderItemsModal from '../pre-orders/AddPreOrderItemsModal';
-import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder } from '../pre-orders/actions';
+import { PreOrderRecord, markPreOrderAsPaid, cancelPreOrder, deletePreOrder, convertOrderToPreOrder } from '../pre-orders/actions';
+import { paidOf, remainingOf, isFullyPaid } from '@/lib/poPayment';
 import { ProductItem } from '../products/actions';
 import { OrderRecord, markOrderAsPaid, markOrderAsShipped, cancelOrder, deleteOrder } from './actions';
 
@@ -63,6 +64,10 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
   const [selectedPoForAddItems, setSelectedPoForAddItems] = useState<PreOrderRecord | null>(null);
 
   const [actionLoading, setActionLoading] = useState(false);
+  const [poPayOrder, setPoPayOrder] = useState<OrderRecord | null>(null);
+  const [poPayInput, setPoPayInput] = useState('');
+  const [poPayError, setPoPayError] = useState('');
+  const [openAddAfterConvertId, setOpenAddAfterConvertId] = useState<string | null>(null);
 
   // Month options in Indonesian
   const MONTH_OPTIONS = [
@@ -321,6 +326,55 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
       })),
     };
     setSelectedPoForEdit(poData);
+  };
+
+  // Setelah order diubah jadi PO, buka form Tambah item otomatis begitu daftar ter-refresh
+  React.useEffect(() => {
+    if (!openAddAfterConvertId) return;
+    const found = orders.find((o) => o.id === openAddAfterConvertId && o.orderType === 'PRE_ORDER');
+    if (found) {
+      setOpenAddAfterConvertId(null);
+      handleOpenPoAddItems(found);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, openAddAfterConvertId]);
+
+  const handleConvertAndAdd = async (order: OrderRecord) => {
+    if (!window.confirm(`Tambah barang PO ke order ${order.orderNumber}?\n\nOrder ini akan jadi satu daftar dengan PO (nomor & invoice sama). Stok yang sudah di-keep tetap aman.`)) return;
+    setActionLoading(true);
+    try {
+      const res = await convertOrderToPreOrder(order.id);
+      if (!res.success) {
+        alert(res.error || 'Gagal mengubah order.');
+      } else if (res.poId) {
+        setOpenAddAfterConvertId(res.poId);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openPoPay = (order: OrderRecord) => {
+    const po: any = order.rawPreOrder || order;
+    setPoPayOrder(order);
+    setPoPayInput(String(remainingOf(po)));
+    setPoPayError('');
+  };
+
+  const submitPoPay = async () => {
+    if (!poPayOrder) return;
+    const po: any = poPayOrder.rawPreOrder || poPayOrder;
+    const amount = Math.floor(Number(poPayInput.replace(/[^0-9]/g, '')) || 0);
+    if (amount <= 0) { setPoPayError('Isi nominal pembayaran.'); return; }
+    if (amount > remainingOf(po)) { setPoPayError('Nominal melebihi sisa tagihan.'); return; }
+    setActionLoading(true);
+    try {
+      const res = await markPreOrderAsPaid(poPayOrder.id, undefined, amount);
+      if (!res.success) { setPoPayError(res.error || 'Gagal mencatat pembayaran.'); return; }
+      setPoPayOrder(null);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // Helper to open PO add items modal
@@ -921,9 +975,13 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
 
                             {/* Payment status badge for PO */}
                             {order.status !== 'CANCELLED' && (
-                              order.paymentStatus === 'PAID' || order.status === 'SHIPPED' ? (
+                              isFullyPaid(order.rawPreOrder || order) ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-2xs mt-1">
                                   <Check className="w-2.5 h-2.5 text-emerald-600" /> Lunas
+                                </span>
+                              ) : paidOf(order.rawPreOrder || order) > 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 mt-1">
+                                  Dibayar {formatRupiah(paidOf(order.rawPreOrder || order))} • Sisa {formatRupiah(remainingOf(order.rawPreOrder || order))}
                                 </span>
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100/70 text-amber-800 border border-amber-200 mt-1">
@@ -977,7 +1035,7 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                           )}
 
                           {/* Pre-Order Specific Actions: Ship (Hanya jika SUDAH LUNAS) */}
-                          {isPo && order.paymentStatus === 'PAID' && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
+                          {isPo && poReadyPcs > 0 && order.status !== 'CANCELLED' && order.status !== 'SHIPPED' && (
                             <button
                               type="button"
                               onClick={() => handleOpenPoShipment(order)}
@@ -1012,12 +1070,24 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
                             </button>
                           )}
 
+                          {!isPo && order.status === 'HOLD' && (
+                            <button
+                              type="button"
+                              disabled={actionLoading}
+                              onClick={() => handleConvertAndAdd(order)}
+                              className="px-2.5 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                              title="Tambah barang yang harus PO ke order ini (satu invoice)"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> Barang PO
+                            </button>
+                          )}
+
                           {/* Mark Paid (Order Reguler & Pre-Order) */}
                           {((!isPo && order.status === 'HOLD') ||
                             (isPo && order.paymentStatus !== 'PAID' && order.status !== 'CANCELLED' && order.status !== 'SHIPPED')) && (
                             <button
                               type="button"
-                              onClick={() => openConfirmModal('PAY', order)}
+                              onClick={() => (isPo ? openPoPay(order) : openConfirmModal('PAY', order))}
                               className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
                               title={isPo ? "Tandai Pre-Order lunas & catat pemasukan keuangan" : "Tandai pesanan lunas & potong stok fisik"}
                             >
@@ -1145,6 +1215,35 @@ export default function OrdersList({ orders, products = [] }: OrdersListProps) {
           products={products}
         />
       )}
+
+      {/* Bayar PO (bisa dicicil) */}
+      {poPayOrder && (() => {
+        const po: any = poPayOrder.rawPreOrder || poPayOrder;
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-5 space-y-3">
+              <h3 className="font-bold text-slate-800">Catat pembayaran {poPayOrder.orderNumber}</h3>
+              <div className="text-xs text-slate-600 space-y-0.5">
+                <div className="flex justify-between"><span>Total</span><span>{formatRupiah(po.totalAmount)}</span></div>
+                <div className="flex justify-between"><span>Sudah dibayar</span><span>{formatRupiah(paidOf(po))}</span></div>
+                <div className="flex justify-between font-bold"><span>Sisa</span><span>{formatRupiah(remainingOf(po))}</span></div>
+              </div>
+              <input
+                inputMode="numeric"
+                value={poPayInput}
+                onChange={(e) => { setPoPayInput(e.target.value); setPoPayError(''); }}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                placeholder="Nominal dibayar"
+              />
+              {poPayError && <p className="text-xs text-rose-600">{poPayError}</p>}
+              <div className="flex gap-2 justify-end">
+                <button type="button" onClick={() => setPoPayOrder(null)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold">Batal</button>
+                <button type="button" disabled={actionLoading} onClick={submitPoPay} className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold disabled:opacity-50">Catat</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Modern In-App Confirmation Modal */}
       {confirmDialog.isOpen && confirmDialog.order && (
