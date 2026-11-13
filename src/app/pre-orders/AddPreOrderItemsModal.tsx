@@ -19,6 +19,7 @@ import { ProductItem } from '../products/actions';
 import { PreOrderRecord, addItemsToPreOrder, AddPreOrderItemInput } from './actions';
 import PoCheckPanel from './PoCheckPanel';
 import { buildPoPreview } from '@/lib/poPreview';
+import { matchProduct } from '@/lib/productMatching';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -106,58 +107,17 @@ export default function AddPreOrderItemsModal({
     }).format(val || 0);
   };
 
-  // Best product match in catalog
+  // Pencocokan ketat: kode/nama harus persis sama dengan Master (12-2, 12 dan 122 berbeda).
+  // Tidak menebak; yang tidak cocok ditandai kuning di panel Periksa sebelum disimpan.
   const findBestProductMatch = (query: string, preferredCategory?: string): ProductItem | null => {
-    const q = (query || '').toLowerCase().trim();
+    const q = (query || '').trim();
     if (!q) return null;
-    const cleanQ = q.replace(/[^a-z0-9]/g, '');
-
-    const candidateProducts = preferredCategory
-      ? products.filter((p) => {
-          const cat = preferredCategory.toLowerCase();
-          const pName = (p.name || '').toLowerCase();
-          return (
-            pName.includes(cat) ||
-            (cat.includes('paris') && pName.includes('paris')) ||
-            (cat.includes('tryspan') && pName.includes('tryspan')) ||
-            (cat.includes('bella') && pName.includes('bella'))
-          );
-        })
-      : products;
-
-    // 1. Exact SKU match
-    const exactSku = candidateProducts.find(
-      (p) =>
-        p.sku?.toLowerCase() === q ||
-        (cleanQ.length >= 2 && p.sku?.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
+    const hit = matchProduct(
+      products.filter((p) => p.isActive !== false),
+      q.toUpperCase(),
+      `${preferredCategory || 'BABY TRYSPAN'} - ${q}`
     );
-    if (exactSku) return exactSku;
-
-    // 2. Exact Motif
-    const exactMotif = candidateProducts.find(
-      (p) => p.motif && p.motif.toLowerCase().trim() === q
-    );
-    if (exactMotif) return exactMotif;
-
-    // 3. Exact Name
-    const exactName = candidateProducts.find((p) => (p.name || '').toLowerCase().trim() === q);
-    if (exactName) return exactName;
-
-    // 4. Combined
-    const exactCombined = candidateProducts.find((p) => {
-      const full = `${p.name || ''} ${p.motif || ''}`.toLowerCase().trim();
-      const skuMotif = `${p.sku || ''} ${p.motif || ''}`.toLowerCase().trim();
-      return full === q || skuMotif === q;
-    });
-    if (exactCombined) return exactCombined;
-
-    // 5. Fallback across all products
-    if (preferredCategory) {
-      const fallbackExact = products.find((p) => p.sku?.toLowerCase() === q);
-      if (fallbackExact) return fallbackExact;
-    }
-
-    return null;
+    return hit ? hit.product : null;
   };
 
   // Re-calculate prices according to master reseller tiers
