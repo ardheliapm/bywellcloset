@@ -16,6 +16,7 @@ import {
   ShoppingBag,
 } from 'lucide-react';
 import { PreOrderRecord } from './actions';
+import { paidOf, remainingOf, isFullyPaid } from '@/lib/poPayment';
 
 interface PreOrderInvoiceModalProps {
   isOpen: boolean;
@@ -147,9 +148,11 @@ ${preOrder.customerPhone ? `No. WhatsApp: ${preOrder.customerPhone}\n` : ''}
 ${itemsText}------------------------------
 *Total Kuantitas: ${currentTotalPcs} pcs*
 *Total Pembayaran: ${formatRupiah(currentTotalNominal)}*
-*Status Pembayaran:* *${preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? '✅ LUNAS' : '⏳ MENUNGGU PEMBAYARAN'}*
+${paidOf(preOrder) > 0 && !isFullyPaid(preOrder) ? `*Sudah Dibayar: ${formatRupiah(paidOf(preOrder))}*
+*Sisa Pembayaran: ${formatRupiah(remainingOf(preOrder))}*
+` : ''}*Status Pembayaran:* *${isFullyPaid(preOrder) ? '✅ LUNAS' : paidOf(preOrder) > 0 ? '🟡 DIBAYAR SEBAGIAN' : '⏳ MENUNGGU PEMBAYARAN'}*
 
-${preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? `✨ *Pesanan sudah LUNAS.* Terima kasih banyak atas pembayarannya ya Kak! Barang akan segera kami siapkan & kirimkan. 🙏` : `*Pembayaran dapat ditransfer melalui:*
+${isFullyPaid(preOrder) ? `✨ *Pesanan sudah LUNAS.* Terima kasih banyak atas pembayarannya ya Kak! Barang akan segera kami siapkan & kirimkan. 🙏` : `*Pembayaran dapat ditransfer melalui:*
 🏦 *Bank Jago*: 1057 0424 9859
 a/n Ardhe Lia Putri Maharani
 💜 *ShopeePay*: 081230543855
@@ -369,7 +372,7 @@ Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`}`
                   </span>
                 )}
                 {preOrder.status !== 'CANCELLED' && (
-                  preOrder.paymentStatus === 'PAID' || preOrder.status === 'SHIPPED' ? (
+                  isFullyPaid(preOrder) ? (
                     <span className="ml-1.5 px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
                       LUNAS
                     </span>
@@ -454,6 +457,20 @@ Pesanan akan segera kami proses dan kirimkan. Terima kasih! 🙏✨`}`
                 <span>Total Tagihan:</span>
                 <span className="text-indigo-700 text-base">{formatRupiah(currentTotalNominal)}</span>
               </div>
+              {paidOf(preOrder) > 0 && (
+                <>
+                  <div className="flex justify-between text-emerald-700">
+                    <span>Sudah Dibayar:</span>
+                    <span className="font-bold">{formatRupiah(paidOf(preOrder))}</span>
+                  </div>
+                  {!isFullyPaid(preOrder) && (
+                    <div className="flex justify-between text-amber-700 font-bold">
+                      <span>Sisa:</span>
+                      <span>{formatRupiah(remainingOf(preOrder))}</span>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
 
