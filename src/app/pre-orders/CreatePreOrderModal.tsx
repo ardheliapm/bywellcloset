@@ -446,7 +446,8 @@ SPARK FLOWER(1)`
     updated[index] = {
       ...updated[index],
       productName: name,
-      productSku: updated[index].productSku || name.toUpperCase().replace(/\s+/g, '-'),
+      productId: null,
+      productSku: name.toUpperCase().replace(/\s+/g, '-'),
     };
     setItems(updated);
   };

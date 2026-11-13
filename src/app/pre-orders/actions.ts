@@ -148,7 +148,7 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
 
         for (const it of cleanItems) {
           let fulfilledNow = 0;
-          let matchedProdId = it.productId;
+          let matchedProdId: string | null = null;
 
           // Strictly match product by ID or exact SKU/motif
           const prod = allActiveProducts.find((p) => isProductMatchItem(p, it));
@@ -820,7 +820,8 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
         for (const it of cleanItems) {
           const existingItem = it.id ? po.items.find((old) => old.id === it.id) : null;
           const matchedProd = allActiveProducts.find((p) => isProductMatchItem(p, it));
-          const prodId = matchedProd ? matchedProd.id : it.productId || null;
+          // Tautan dari form hanya dipercaya kalau produknya memang cocok dengan kode yang diketik
+          const prodId = matchedProd ? matchedProd.id : null;
 
           let fulfilled = existingItem ? existingItem.quantityFulfilled : 0;
           const shipped = existingItem ? existingItem.quantityShipped : 0;
@@ -1101,74 +1102,111 @@ export async function addItemsToPreOrder(
 }
 
 // 7. Audit & Resync all Product Reserved Stocks and Pre-Order Allocations
+// Dibuat dengan query massal (bukan per produk) supaya tidak kena batas waktu transaksi.
 export async function resyncAllPreOrderStock() {
   try {
+    const report: string[] = [];
+    let allocatedTotal = 0;
+
     await prisma.$transaction(
       async (tx) => {
-        // 1. Recalculate true reservedStock for ALL products
-        const products = await tx.product.findMany();
+        const [products, holdItems, activePoItems] = await Promise.all([
+          tx.product.findMany(),
+          tx.orderItem.findMany({
+            where: { productId: { not: null }, order: { status: 'HOLD' } },
+            select: { productId: true, quantity: true },
+          }),
+          tx.preOrderItem.findMany({
+            where: { productId: { not: null }, preOrder: { status: { notIn: ['CANCELLED', 'SHIPPED'] } } },
+            select: { productId: true, quantityFulfilled: true, quantityShipped: true },
+          }),
+        ]);
 
-        for (const p of products) {
-          const regItems = await tx.orderItem.findMany({
-            where: {
-              productId: p.id,
-              order: { status: 'HOLD' },
-            },
-          });
-          const regHeld = regItems.reduce((acc, it) => acc + it.quantity, 0);
-
-          const poItems = await tx.preOrderItem.findMany({
-            where: {
-              productId: p.id,
-              preOrder: { status: { notIn: ['CANCELLED', 'SHIPPED'] } },
-            },
-          });
-          const poHeld = poItems.reduce(
-            (acc, it) => acc + Math.max(0, it.quantityFulfilled - it.quantityShipped),
-            0
+        // 0. Perbaiki item PO yang salah tautan produk (belum menahan stok, jadi aman dipindah)
+        const activeProducts = products.filter((p) => p.isActive);
+        const unfulfilled = await tx.preOrderItem.findMany({
+          where: {
+            quantityFulfilled: 0,
+            quantityShipped: 0,
+            preOrder: { status: { notIn: ['CANCELLED', 'SHIPPED'] } },
+          },
+        });
+        for (const it of unfulfilled) {
+          const strict = activeProducts.find((p) =>
+            isProductMatchItem(p, { productSku: it.productSku, productName: it.productName })
           );
-
-          const trueReserved = regHeld + poHeld;
-          if (p.reservedStock !== trueReserved) {
-            await tx.product.update({
-              where: { id: p.id },
-              data: { reservedStock: trueReserved },
-            });
-            p.reservedStock = trueReserved;
-          }
-
-          // 2. If product has available stock, allocate FIFO to any waiting PO items
-          const avail = Math.max(0, p.physicalStock - p.reservedStock);
-          if (avail > 0) {
-            await allocateStockToWaitingPreOrders(tx, p, avail);
+          if (strict && it.productId !== strict.id) {
+            await tx.preOrderItem.update({ where: { id: it.id }, data: { productId: strict.id } });
+            report.push(`Diperbaiki: ${it.productSku} dihubungkan ke produk "${strict.sku}".`);
+          } else if (!strict && it.productId) {
+            const linked = products.find((p) => p.id === it.productId);
+            if (linked && !isProductMatchItem(linked, { productSku: it.productSku, productName: it.productName })) {
+              await tx.preOrderItem.update({ where: { id: it.id }, data: { productId: null } });
+              report.push(`Diperbaiki: ${it.productSku} dilepas dari produk "${linked.sku}" yang tidak cocok.`);
+            }
           }
         }
 
-        // 3. Recalculate status for all non-cancelled preorders
+        // 1. Hitung ulang stok tahan sebenarnya per produk
+        const held = new Map<string, number>();
+        for (const it of holdItems) {
+          held.set(it.productId!, (held.get(it.productId!) || 0) + it.quantity);
+        }
+        for (const it of activePoItems) {
+          held.set(
+            it.productId!,
+            (held.get(it.productId!) || 0) + Math.max(0, it.quantityFulfilled - it.quantityShipped)
+          );
+        }
+
+        const withStock: typeof products = [];
+        for (const p of products) {
+          const trueReserved = held.get(p.id) || 0;
+          if (p.reservedStock !== trueReserved) {
+            await tx.product.update({ where: { id: p.id }, data: { reservedStock: trueReserved } });
+            p.reservedStock = trueReserved;
+          }
+          if (p.physicalStock - p.reservedStock > 0) withStock.push(p);
+        }
+
+        // 2. Bagikan stok bebas ke item PO yang menunggu (hanya produk yang punya stok bebas)
+        for (const p of withStock) {
+          const avail = Math.max(0, p.physicalStock - p.reservedStock);
+          const res = await allocateStockToWaitingPreOrders(tx, p, avail);
+          allocatedTotal += res.allocatedCount;
+          if (res.allocatedCount > 0) {
+            report.push(`${p.sku}: +${res.allocatedCount} pcs untuk ${res.poNumbers.join(', ')}`);
+          }
+        }
+
+        // 3. Hitung ulang status semua PO
         const allPos = await tx.preOrder.findMany({
           where: { status: { notIn: ['CANCELLED'] } },
           include: { items: true },
         });
 
         for (const po of allPos) {
-          const totalOrdered = po.items.reduce((acc, it) => acc + it.quantityOrdered, 0);
-          const totalFulfilled = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
-          const totalShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
-
-          let correctStatus = 'WAITING_STOCK';
-          if (totalShipped >= totalOrdered && totalOrdered > 0) {
-            correctStatus = 'SHIPPED';
-          } else if (totalFulfilled >= totalOrdered && totalOrdered > 0) {
-            correctStatus = 'READY';
-          } else if (totalFulfilled > 0 || totalShipped > 0) {
-            correctStatus = totalShipped > 0 ? 'PARTIAL_SHIPPED' : 'PARTIAL_READY';
-          }
-
+          const correctStatus = poStatusFromQuantities(po.items);
           if (po.status !== correctStatus) {
-            await tx.preOrder.update({
-              where: { id: po.id },
-              data: { status: correctStatus },
-            });
+            await tx.preOrder.update({ where: { id: po.id }, data: { status: correctStatus } });
+          }
+        }
+
+        // 4. Laporan: item yang masih menunggu padahal ada produk cocok dengan stok bebas
+        const productById = new Map(products.map((p) => [p.id, p]));
+        for (const po of allPos) {
+          if (po.status === 'SHIPPED') continue;
+          for (const it of po.items) {
+            if (it.quantityFulfilled >= it.quantityOrdered) continue;
+            const linked = it.productId ? productById.get(it.productId) : null;
+            const strict = products.find((p) => p.isActive && isProductMatchItem(p, { productSku: it.productSku, productName: it.productName }));
+            if (strict && strict.physicalStock - strict.reservedStock > 0 && linked && linked.id !== strict.id) {
+              report.push(
+                `PERHATIAN ${po.poNumber} / ${it.productSku}: item terhubung ke produk "${linked.sku}", padahal kodenya cocok dengan "${strict.sku}" yang punya stok bebas ${strict.physicalStock - strict.reservedStock}. Hubungkan ulang.`
+              );
+            } else if (!linked && !strict) {
+              report.push(`${po.poNumber} / ${it.productSku}: tidak ada produk di Master yang cocok persis.`);
+            }
           }
         }
       },
@@ -1181,15 +1219,12 @@ export async function resyncAllPreOrderStock() {
     revalidatePath('/stock-in');
     revalidatePath('/');
 
-    return { success: true };
+    return { success: true, allocatedTotal, report };
   } catch (error: any) {
     console.error('Error resyncing pre-order stock:', error);
     return { success: false, error: error.message || 'Gagal menyinkronkan stok Pre-Order' };
   }
 }
-
-
-
 
 // 12. Tautkan item PO yang belum terhubung (nama/kode salah ketik) ke produk di Master
 export interface LinkPreOrderItemInput {
