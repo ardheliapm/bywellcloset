@@ -4,7 +4,8 @@ import { paidOf, remainingOf } from '@/lib/poPayment';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { isProductMatchItem, allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
-import { reconcileProductAllocation } from '@/lib/opnameAllocation';
+import { reconcileProductAllocation, poStatusFromQuantities } from '@/lib/opnameAllocation';
+import { buildPoItemsFromOrder } from '@/lib/orderToPo';
 import {
   findProductMasterType,
   calculateProductPrice,
@@ -1258,4 +1259,52 @@ export async function linkPreOrderItemsToProducts(links: LinkPreOrderItemInput[]
 
   const okCount = results.filter((r) => r.ok).length;
   return { success: okCount > 0, results, error: okCount === 0 ? 'Semua item gagal ditautkan.' : undefined };
+}
+
+
+// Ubah order HOLD biasa menjadi PO supaya bisa ditambah barang yang harus menunggu stok.
+// Stok yang sudah ditahan TETAP ditahan (tidak dilepas lalu ditahan ulang). Nomor & tanggal order dipertahankan.
+export async function convertOrderToPreOrder(orderId: string) {
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findUnique({ where: { id: orderId }, include: { items: true } });
+        if (!order) throw new Error('Order tidak ditemukan.');
+        if (order.status !== 'HOLD') {
+          throw new Error(`Hanya order berstatus HOLD yang bisa diubah jadi PO. Status saat ini: ${order.status}`);
+        }
+        const existing = await tx.preOrder.findUnique({ where: { poNumber: order.orderNumber } });
+        if (existing) throw new Error('Nomor order ini sudah dipakai PO lain.');
+
+        const poItems = buildPoItemsFromOrder(order.items);
+        const totalAmount = poItems.reduce((a, it) => a + it.subtotal, 0);
+
+        const po = await tx.preOrder.create({
+          data: {
+            poNumber: order.orderNumber,
+            customerName: order.customerName,
+            customerPhone: order.customerPhone,
+            status: poStatusFromQuantities(poItems),
+            totalAmount,
+            notes: order.notes,
+            createdAt: order.createdAt,
+            items: { create: poItems },
+          },
+        });
+        // Hapus order lama; stok tahanan tidak disentuh karena kini dipegang PO.
+        await tx.order.delete({ where: { id: order.id } });
+        return po;
+      },
+      { maxWait: 15000, timeout: 30000 }
+    );
+
+    revalidatePath('/orders');
+    revalidatePath('/pre-orders');
+    revalidatePath('/products');
+    revalidatePath('/');
+    return { success: true, poId: result.id };
+  } catch (error: any) {
+    console.error('Error converting order to PO:', error);
+    return { success: false, error: error.message || 'Gagal mengubah order menjadi PO' };
+  }
 }
