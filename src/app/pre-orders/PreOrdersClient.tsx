@@ -90,7 +90,13 @@ export default function PreOrdersClient({
     setIsResyncing(false);
     if (!res.success) {
       alert(res.error || 'Gagal menyinkronkan stok.');
+      return;
     }
+    const lines = res.report || [];
+    alert(
+      `Sinkron selesai. Stok dibagikan ke PO: ${res.allocatedTotal || 0} pcs.` +
+        (lines.length ? `\n\n${lines.slice(0, 15).join('\n')}` : '')
+    );
   };
 
   const formatRupiah = (val: number) => {
