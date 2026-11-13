@@ -328,6 +328,10 @@ export default function AddPreOrderItemsModal({
     const updated = items.map((it) => {
       if (it.id !== id) return it;
       const modified = { ...it, [field]: val };
+      // Kode/nama diketik ulang = bukan produk yang tadi dipilih lagi, putus tautannya
+      if (field === 'productSku' || field === 'productName') {
+        modified.productId = null;
+      }
       if (field === 'price') {
         modified.isCustomPrice = true;
       }

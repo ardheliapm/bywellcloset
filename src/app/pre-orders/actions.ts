@@ -148,7 +148,7 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
 
         for (const it of cleanItems) {
           let fulfilledNow = 0;
-          let matchedProdId = it.productId;
+          let matchedProdId: string | null = null;
 
           // Strictly match product by ID or exact SKU/motif
           const prod = allActiveProducts.find((p) => isProductMatchItem(p, it));
@@ -820,7 +820,8 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
         for (const it of cleanItems) {
           const existingItem = it.id ? po.items.find((old) => old.id === it.id) : null;
           const matchedProd = allActiveProducts.find((p) => isProductMatchItem(p, it));
-          const prodId = matchedProd ? matchedProd.id : it.productId || null;
+          // Tautan dari form hanya dipercaya kalau produknya memang cocok dengan kode yang diketik
+          const prodId = matchedProd ? matchedProd.id : null;
 
           let fulfilled = existingItem ? existingItem.quantityFulfilled : 0;
           const shipped = existingItem ? existingItem.quantityShipped : 0;
@@ -1120,6 +1121,31 @@ export async function resyncAllPreOrderStock() {
             select: { productId: true, quantityFulfilled: true, quantityShipped: true },
           }),
         ]);
+
+        // 0. Perbaiki item PO yang salah tautan produk (belum menahan stok, jadi aman dipindah)
+        const activeProducts = products.filter((p) => p.isActive);
+        const unfulfilled = await tx.preOrderItem.findMany({
+          where: {
+            quantityFulfilled: 0,
+            quantityShipped: 0,
+            preOrder: { status: { notIn: ['CANCELLED', 'SHIPPED'] } },
+          },
+        });
+        for (const it of unfulfilled) {
+          const strict = activeProducts.find((p) =>
+            isProductMatchItem(p, { productSku: it.productSku, productName: it.productName })
+          );
+          if (strict && it.productId !== strict.id) {
+            await tx.preOrderItem.update({ where: { id: it.id }, data: { productId: strict.id } });
+            report.push(`Diperbaiki: ${it.productSku} dihubungkan ke produk "${strict.sku}".`);
+          } else if (!strict && it.productId) {
+            const linked = products.find((p) => p.id === it.productId);
+            if (linked && !isProductMatchItem(linked, { productSku: it.productSku, productName: it.productName })) {
+              await tx.preOrderItem.update({ where: { id: it.id }, data: { productId: null } });
+              report.push(`Diperbaiki: ${it.productSku} dilepas dari produk "${linked.sku}" yang tidak cocok.`);
+            }
+          }
+        }
 
         // 1. Hitung ulang stok tahan sebenarnya per produk
         const held = new Map<string, number>();
