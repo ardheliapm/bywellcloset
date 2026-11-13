@@ -21,11 +21,11 @@ import {
   Check,
   Edit3,
 } from 'lucide-react';
-import { ProductItem } from '../products/actions';
+import { ProductItem, createProductFromDraft } from '../products/actions';
 import { createPreOrder } from './actions';
 import PoCheckPanel from './PoCheckPanel';
 import { buildPoPreview } from '@/lib/poPreview';
-import { matchProduct } from '@/lib/productMatching';
+import { matchProduct, buildNewProductDraft } from '@/lib/productMatching';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -88,6 +88,11 @@ SPARK FLOWER(1)`
   // Open suggestion dropdown for a specific row index in manual mode
   const [activeDropdownIndex, setActiveDropdownIndex] = useState<number | null>(null);
 
+  // Produk yang baru dibuat dari panel periksa (belum ada di daftar produk dari server)
+  const [extraProducts, setExtraProducts] = useState<ProductItem[]>([]);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const catalog = useMemo(() => [...products, ...extraProducts], [products, extraProducts]);
+
   // Pratinjau pemeriksaan penamaan sebelum PO disimpan
   const previewLines = useMemo(
     () =>
@@ -95,14 +100,35 @@ SPARK FLOWER(1)`
         items.filter(
           (it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0
         ),
-        products
+        catalog
       ),
-    [items, products]
+    [items, catalog]
   );
 
   const handlePickSuggestion = (itemId: string, prod: ProductItem) => {
     const idx = items.findIndex((it) => it.id === itemId);
     if (idx >= 0) handleSelectProduct(idx, prod);
+  };
+
+  const handleCreateProduct = async (itemId: string) => {
+    const line = previewLines.find((l) => l.itemId === itemId);
+    if (!line) return;
+    const draft = buildNewProductDraft(line.rawSku, line.rawName);
+    if (!draft) return;
+    const ok = window.confirm(
+      `Buat produk baru di Master?\n\nSKU: ${draft.sku}\nKategori: ${draft.name}\nHarga jual: Rp ${draft.sellingPrice.toLocaleString('id-ID')}\nStok awal: 0\n\nPastikan kodenya sudah benar.`
+    );
+    if (!ok) return;
+    setCreatingId(itemId);
+    const res = await createProductFromDraft(line.rawSku, line.rawName);
+    setCreatingId(null);
+    if (!res.success) {
+      setError(res.error);
+      return;
+    }
+    setExtraProducts((prev) => (prev.some((p) => p.id === res.product.id) ? prev : [...prev, res.product]));
+    handlePickSuggestion(itemId, res.product);
+    setSuccessMsg(`Produk ${res.product.sku} dibuat. Stok masih 0, PO akan menunggu stok masuk.`);
   };
 
   // Reset or initialize on open
@@ -160,7 +186,7 @@ SPARK FLOWER(1)`
     const q = (query || '').trim();
     if (!q) return null;
     const hit = matchProduct(
-      products.filter((p) => p.isActive !== false),
+      catalog.filter((p) => p.isActive !== false),
       q.toUpperCase(),
       `${preferredCategory || 'BABY TRYSPAN'} - ${q}`
     );
@@ -516,7 +542,7 @@ SPARK FLOWER(1)`
       return;
     }
 
-    const unknown = buildPoPreview(validItems, products).filter((l) => !l.product);
+    const unknown = buildPoPreview(validItems, catalog).filter((l) => !l.product);
     if (unknown.length > 0) {
       const names = unknown.map((l) => `- ${l.typed} (${l.quantity} pcs)`).join('\n');
       const ok = window.confirm(
@@ -1018,7 +1044,7 @@ SPARK FLOWER(1)`
               </div>
             </form>
           )}
-          <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} />
+          <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} onCreate={handleCreateProduct} creatingId={creatingId} />
         </div>
 
         {/* Footer */}

@@ -23,6 +23,9 @@ export interface PreviewLine<P extends PreviewProduct = PreviewProduct> {
   itemId: string;
   /** Teks yang diketik/ditempel pengguna */
   typed: string;
+  /** SKU dan nama mentah dari baris, dipakai untuk menyusun usulan produk baru */
+  rawSku: string;
+  rawName: string;
   quantity: number;
   /** Produk Master yang dituju, null kalau tidak dikenali */
   product: P | null;
@@ -56,7 +59,7 @@ export function buildPoPreview<P extends PreviewProduct>(items: PreviewInputItem
 
     if (!product) {
       const suggestions = suggestProducts(active, it.productSku || '', it.productName || '', 3).map((s) => s.product);
-      lines.push({ itemId: it.id, typed, quantity: qty, product: null, suggestions, free: 0, ready: 0, waiting: qty });
+      lines.push({ itemId: it.id, typed, rawSku: it.productSku || '', rawName: it.productName || '', quantity: qty, product: null, suggestions, free: 0, ready: 0, waiting: qty });
       continue;
     }
 
@@ -64,7 +67,7 @@ export function buildPoPreview<P extends PreviewProduct>(items: PreviewInputItem
     const free = remaining.get(product.id)!;
     const ready = Math.min(qty, free);
     remaining.set(product.id, free - ready);
-    lines.push({ itemId: it.id, typed, quantity: qty, product, suggestions: [], free, ready, waiting: qty - ready });
+    lines.push({ itemId: it.id, typed, rawSku: it.productSku || '', rawName: it.productName || '', quantity: qty, product, suggestions: [], free, ready, waiting: qty - ready });
   }
   return lines;
 }

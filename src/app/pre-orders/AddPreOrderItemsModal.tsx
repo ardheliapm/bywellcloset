@@ -15,11 +15,11 @@ import {
   Clock,
   Tag,
 } from 'lucide-react';
-import { ProductItem } from '../products/actions';
+import { ProductItem, createProductFromDraft } from '../products/actions';
 import { PreOrderRecord, addItemsToPreOrder, AddPreOrderItemInput } from './actions';
 import PoCheckPanel from './PoCheckPanel';
 import { buildPoPreview } from '@/lib/poPreview';
-import { matchProduct } from '@/lib/productMatching';
+import { matchProduct, buildNewProductDraft } from '@/lib/productMatching';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -113,7 +113,7 @@ export default function AddPreOrderItemsModal({
     const q = (query || '').trim();
     if (!q) return null;
     const hit = matchProduct(
-      products.filter((p) => p.isActive !== false),
+      catalog.filter((p) => p.isActive !== false),
       q.toUpperCase(),
       `${preferredCategory || 'BABY TRYSPAN'} - ${q}`
     );
@@ -353,13 +353,18 @@ export default function AddPreOrderItemsModal({
     0
   );
 
+  // Produk yang baru dibuat dari panel periksa (belum ada di daftar produk dari server)
+  const [extraProducts, setExtraProducts] = useState<ProductItem[]>([]);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const catalog = useMemo(() => [...products, ...extraProducts], [products, extraProducts]);
+
   const previewLines = useMemo(
     () =>
       buildPoPreview(
         items.filter((it) => (it.productSku?.trim() || it.productName?.trim()) && Number(it.quantityOrdered) > 0),
-        products
+        catalog
       ),
-    [items, products]
+    [items, catalog]
   );
 
   const handlePickSuggestion = (itemId: string, prod: ProductItem) => {
@@ -386,6 +391,27 @@ export default function AddPreOrderItemsModal({
     );
   };
 
+  const handleCreateProduct = async (itemId: string) => {
+    const line = previewLines.find((l) => l.itemId === itemId);
+    if (!line) return;
+    const draft = buildNewProductDraft(line.rawSku, line.rawName);
+    if (!draft) return;
+    const ok = window.confirm(
+      `Buat produk baru di Master?\n\nSKU: ${draft.sku}\nKategori: ${draft.name}\nHarga jual: Rp ${draft.sellingPrice.toLocaleString('id-ID')}\nStok awal: 0\n\nPastikan kodenya sudah benar.`
+    );
+    if (!ok) return;
+    setCreatingId(itemId);
+    const res = await createProductFromDraft(line.rawSku, line.rawName);
+    setCreatingId(null);
+    if (!res.success) {
+      setError(res.error);
+      return;
+    }
+    setExtraProducts((prev) => (prev.some((p) => p.id === res.product.id) ? prev : [...prev, res.product]));
+    handlePickSuggestion(itemId, res.product);
+    setSuccessMsg(`Produk ${res.product.sku} dibuat. Stok masih 0, item akan menunggu stok masuk.`);
+  };
+
   // Submit to server
   const handleSubmit = async () => {
     if (items.length === 0) {
@@ -399,7 +425,7 @@ export default function AddPreOrderItemsModal({
       return;
     }
 
-    const unknown = buildPoPreview(items, products).filter((l) => !l.product);
+    const unknown = buildPoPreview(items, catalog).filter((l) => !l.product);
     if (unknown.length > 0) {
       const names = unknown.map((l) => `- ${l.typed} (${l.quantity} pcs)`).join('\n');
       const ok = window.confirm(
@@ -718,7 +744,7 @@ export default function AddPreOrderItemsModal({
                 )}
               </div>
               <div className="px-6 pb-4">
-                <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} />
+                <PoCheckPanel lines={previewLines} onPick={handlePickSuggestion} onCreate={handleCreateProduct} creatingId={creatingId} />
               </div>
             </div>
 
