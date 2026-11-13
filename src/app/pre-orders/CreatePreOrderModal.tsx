@@ -25,6 +25,7 @@ import { ProductItem } from '../products/actions';
 import { createPreOrder } from './actions';
 import PoCheckPanel from './PoCheckPanel';
 import { buildPoPreview } from '@/lib/poPreview';
+import { matchProduct } from '@/lib/productMatching';
 import {
   getStoredProductTypes,
   findProductMasterType,
@@ -153,73 +154,17 @@ SPARK FLOWER(1)`
   );
 
   // Product Matching Helper
+  // Pencocokan ketat: kode/nama harus persis sama dengan Master (12-2, 12 dan 122 berbeda).
+  // Tidak menebak; yang tidak cocok ditandai kuning di panel Periksa sebelum disimpan.
   const findBestProductMatch = (query: string, preferredCategory?: string): ProductItem | null => {
-    const q = query.toLowerCase().trim();
+    const q = (query || '').trim();
     if (!q) return null;
-    const cleanQ = q.replace(/[^a-z0-9]/g, '');
-
-    // Category filter if preferredCategory exists
-    const candidateProducts = preferredCategory
-      ? products.filter((p) => {
-          const cat = preferredCategory.toLowerCase();
-          return (
-            p.name.toLowerCase().includes(cat) ||
-            (cat.includes('paris') && p.name.toLowerCase().includes('paris')) ||
-            (cat.includes('tryspan') && p.name.toLowerCase().includes('tryspan')) ||
-            (cat.includes('bella') && p.name.toLowerCase().includes('bella'))
-          );
-        })
-      : products;
-
-    const searchPool = candidateProducts.length > 0 ? candidateProducts : products;
-
-    // 1. Exact SKU match
-    const exactSku = searchPool.find(
-      (p) =>
-        p.sku.toLowerCase() === q ||
-        (cleanQ.length >= 2 && p.sku.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanQ)
+    const hit = matchProduct(
+      products.filter((p) => p.isActive !== false),
+      q.toUpperCase(),
+      `${preferredCategory || 'BABY TRYSPAN'} - ${q}`
     );
-    if (exactSku) return exactSku;
-
-    // 2. Exact Motif match
-    const exactMotif = searchPool.find(
-      (p) => p.motif && p.motif.toLowerCase().trim() === q
-    );
-    if (exactMotif) return exactMotif;
-
-    // 3. Exact Full Name match
-    const exactName = searchPool.find((p) => p.name.toLowerCase().trim() === q);
-    if (exactName) return exactName;
-
-    // 4. Exact Combined
-    const exactCombined = searchPool.find((p) => {
-      const full = `${p.name} ${p.motif || ''}`.toLowerCase().trim();
-      const withColor = `${p.name} ${p.motif || ''} ${p.color || ''}`.toLowerCase().trim();
-      const skuMotif = `${p.sku} ${p.motif || ''}`.toLowerCase().trim();
-      return full === q || withColor === q || skuMotif === q;
-    });
-    if (exactCombined) return exactCombined;
-
-    // 5. SKU prefix match (at least 3 chars)
-    if (cleanQ.length >= 3) {
-      const prefixSku = searchPool.find((p) => {
-        const pCleanSku = p.sku.toLowerCase().replace(/[^a-z0-9]/g, '');
-        return pCleanSku === cleanQ || (pCleanSku.startsWith(cleanQ) && cleanQ.length >= 4);
-      });
-      if (prefixSku) return prefixSku;
-    }
-
-    // 6. Name / Motif includes query (at least 4 chars)
-    if (q.length >= 4) {
-      const nameContains = searchPool.find((p) => {
-        const pName = p.name.toLowerCase();
-        const pMotif = p.motif ? p.motif.toLowerCase() : '';
-        return pName.includes(q) || (pMotif && pMotif.includes(q));
-      });
-      if (nameContains) return nameContains;
-    }
-
-    return null;
+    return hit ? hit.product : null;
   };
 
   // Reseller tier price calculation based on total PO qty
