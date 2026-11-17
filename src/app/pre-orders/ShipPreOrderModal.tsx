@@ -145,10 +145,10 @@ export default function ShipPreOrderModal({
 
           {totalPcsToShip > 0 && unpaidForShipment > 0 && (
             <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
-              Pembayaran belum penuh untuk barang yang dikirim: nilai kirim{' '}
+              Pembayaran belum cukup untuk barang yang dikirim: nilai kirim{' '}
               <strong>{formatRupiah(shippedValueBefore + totalNominalToShip)}</strong>, sudah dibayar{' '}
-              <strong>{formatRupiah(paidNow)}</strong>, kurang <strong>{formatRupiah(unpaidForShipment)}</strong>. Tetap
-              bisa dikirim; ini hanya pengingat.
+              <strong>{formatRupiah(paidNow)}</strong>, kurang <strong>{formatRupiah(unpaidForShipment)}</strong>. Catat
+              pembayaran dulu, atau kurangi jumlah kirim; kalau tidak, pengiriman akan ditolak.
             </div>
           )}
 

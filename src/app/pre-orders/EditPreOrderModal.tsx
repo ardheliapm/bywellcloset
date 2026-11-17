@@ -245,7 +245,7 @@ export default function EditPreOrderModal({
   };
 
   const handleAutoRecalculatePrices = () => {
-    const updated = computeTiered((it) => shippedOf(it) > 0);
+    const updated = computeTiered((it) => shippedOf(it) >= it.quantityOrdered);
     setItems(updated);
     setSuccessMsg('Harga satuan seluruh produk berhasil dihitung ulang otomatis sesuai ketentuan tier!');
     setTimeout(() => setSuccessMsg(null), 3000);
@@ -271,7 +271,7 @@ export default function EditPreOrderModal({
     // Harga otomatis mengikuti tier reseller sesuai total qty (kecuali yang sudah dikirim / harga diketik manual)
     let finalItems = items;
     try {
-      finalItems = computeTiered((it) => shippedOf(it) > 0 || manualPriceKeys.has(keyOf(it)));
+      finalItems = computeTiered((it) => shippedOf(it) >= it.quantityOrdered || manualPriceKeys.has(keyOf(it)));
     } catch {
       finalItems = items;
     }

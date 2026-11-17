@@ -261,6 +261,26 @@ export async function shipPreOrderItems(
       return { success: false, error: 'Pilih minimal 1 pcs barang yang ready untuk dikirim.' };
     }
 
+    // Barang hanya boleh dikirim sebesar yang sudah dibayar: nilai terkirim (lama + sekarang) <= dibayar
+    {
+      const shippedBefore = po.items.reduce((acc, it) => acc + it.price * it.quantityShipped, 0);
+      let shippingNow = 0;
+      for (const ship of validShipments) {
+        const item = po.items.find((it) => it.id === ship.itemId);
+        if (!item) continue;
+        const q = Math.min(ship.quantityToShip, item.quantityFulfilled - item.quantityShipped);
+        if (q > 0) shippingNow += item.price * q;
+      }
+      const paid = paidOf(po);
+      if (shippedBefore + shippingNow > paid) {
+        const kurang = shippedBefore + shippingNow - paid;
+        return {
+          success: false,
+          error: `Belum bisa dikirim: pembayaran kurang Rp ${kurang.toLocaleString('id-ID')} untuk barang yang akan dikirim (nilai kirim Rp ${(shippedBefore + shippingNow).toLocaleString('id-ID')}, sudah dibayar Rp ${paid.toLocaleString('id-ID')}). Catat pembayaran dulu.`,
+        };
+      }
+    }
+
     await prisma.$transaction(
       async (tx) => {
         let shipmentTotalAmount = 0;
@@ -918,7 +938,36 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
           totalPcsFulfilled += fulfilled;
           totalPcsShipped += shipped;
 
-          if (existingItem) {
+          if (existingItem && shipped > 0 && it.quantityOrdered > shipped && it.price !== existingItem.price) {
+            // Bagian yang sudah dikirim tetap di harga lama; sisanya pindah ke baris baru dengan harga baru
+            await tx.preOrderItem.update({
+              where: { id: existingItem.id },
+              data: {
+                productId: prodId,
+                productSku: it.productSku,
+                productName: it.productName,
+                quantityOrdered: shipped,
+                quantityFulfilled: shipped,
+                quantityShipped: shipped,
+                subtotal: Math.floor(existingItem.price * shipped),
+              },
+            });
+            const restOrdered = it.quantityOrdered - shipped;
+            await tx.preOrderItem.create({
+              data: {
+                preOrderId: poId,
+                productId: prodId,
+                productSku: it.productSku,
+                productName: it.productName,
+                price: it.price,
+                quantityOrdered: restOrdered,
+                quantityFulfilled: Math.max(0, fulfilled - shipped),
+                quantityShipped: 0,
+                subtotal: Math.floor(it.price * restOrdered),
+              },
+            });
+            totalAmount += Math.floor(existingItem.price * shipped) - subtotal + Math.floor(it.price * restOrdered);
+          } else if (existingItem) {
             await tx.preOrderItem.update({
               where: { id: existingItem.id },
               data: {
@@ -1082,9 +1131,42 @@ export async function addItemsToPreOrder(
 
         // Satu invoice = satu tier harga: barang lama (yang belum dikirim) ikut dihitung ulang ke tier terbaru
         for (const upd of priceUpdates) {
-          const old = liveItems.find((x) => x.id === upd.itemId);
+          let old = liveItems.find((x) => x.id === upd.itemId);
           const newPrice = Math.max(0, Math.floor(Number(upd.price) || 0));
-          if (!old || old.quantityShipped > 0 || old.price === newPrice) continue;
+          if (!old || old.price === newPrice) continue;
+          // Sebagian sudah dikirim: bagian terkirim tetap di harga lama, sisanya dipindah ke baris baru berharga tier
+          if (old.quantityShipped >= old.quantityOrdered) continue;
+          if (old.quantityShipped > 0) {
+            const shippedRow = old;
+            const restOrdered = shippedRow.quantityOrdered - shippedRow.quantityShipped;
+            const restFulfilled = Math.max(0, shippedRow.quantityFulfilled - shippedRow.quantityShipped);
+            await tx.preOrderItem.update({
+              where: { id: shippedRow.id },
+              data: {
+                quantityOrdered: shippedRow.quantityShipped,
+                quantityFulfilled: shippedRow.quantityShipped,
+                subtotal: shippedRow.price * shippedRow.quantityShipped,
+              },
+            });
+            const created = await tx.preOrderItem.create({
+              data: {
+                preOrderId,
+                productId: shippedRow.productId,
+                productSku: shippedRow.productSku,
+                productName: shippedRow.productName,
+                price: shippedRow.price,
+                quantityOrdered: restOrdered,
+                quantityFulfilled: restFulfilled,
+                quantityShipped: 0,
+                subtotal: shippedRow.price * restOrdered,
+              },
+            });
+            shippedRow.quantityOrdered = shippedRow.quantityShipped;
+            shippedRow.quantityFulfilled = shippedRow.quantityShipped;
+            shippedRow.subtotal = shippedRow.price * shippedRow.quantityShipped;
+            liveItems.push({ ...created });
+            old = liveItems[liveItems.length - 1];
+          }
           const newSubtotal = newPrice * old.quantityOrdered;
           await tx.preOrderItem.update({
             where: { id: old.id },
