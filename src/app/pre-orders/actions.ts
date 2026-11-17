@@ -557,6 +557,8 @@ export async function cancelPreOrder(poId: string) {
       return { success: false, error: 'PO yang sudah dikirim semua tidak dapat dibatalkan.' };
     }
 
+    const hasShipped = po.items.some((it) => it.quantityShipped > 0);
+
     await prisma.$transaction(
       async (tx) => {
         // Release any fulfilled but not yet shipped stock
@@ -572,10 +574,42 @@ export async function cancelPreOrder(poId: string) {
           }
         }
 
+        if (!hasShipped) {
+          await tx.preOrder.update({
+            where: { id: poId },
+            data: {
+              status: 'CANCELLED',
+            },
+          });
+          return;
+        }
+
+        // Sebagian sudah dikirim: bagian terkirim tetap (ditagih), sisa yang belum dikirim dibatalkan
+        let newTotal = 0;
+        for (const it of po.items) {
+          if (it.quantityShipped <= 0) {
+            await tx.preOrderItem.delete({ where: { id: it.id } });
+            continue;
+          }
+          const subtotal = Math.floor(it.price * it.quantityShipped);
+          newTotal += subtotal;
+          await tx.preOrderItem.update({
+            where: { id: it.id },
+            data: {
+              quantityOrdered: it.quantityShipped,
+              quantityFulfilled: it.quantityShipped,
+              subtotal,
+            },
+          });
+        }
+        const paidNow = paidOf(po);
         await tx.preOrder.update({
           where: { id: poId },
           data: {
-            status: 'CANCELLED',
+            status: 'SHIPPED',
+            totalAmount: newTotal,
+            paidAmount: paidNow,
+            paymentStatus: paidNow >= newTotal ? 'PAID' : 'UNPAID',
           },
         });
       },
@@ -1043,9 +1077,12 @@ export async function addItemsToPreOrder(
         let totalPcsFulfilled = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
         let totalPcsShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
 
+        // Salinan item yang bisa diubah selama transaksi (untuk hitung harga & penggabungan baris)
+        const liveItems = po.items.map((x) => ({ ...x }));
+
         // Satu invoice = satu tier harga: barang lama (yang belum dikirim) ikut dihitung ulang ke tier terbaru
         for (const upd of priceUpdates) {
-          const old = po.items.find((x) => x.id === upd.itemId);
+          const old = liveItems.find((x) => x.id === upd.itemId);
           const newPrice = Math.max(0, Math.floor(Number(upd.price) || 0));
           if (!old || old.quantityShipped > 0 || old.price === newPrice) continue;
           const newSubtotal = newPrice * old.quantityOrdered;
@@ -1054,11 +1091,55 @@ export async function addItemsToPreOrder(
             data: { price: newPrice, subtotal: newSubtotal },
           });
           additionalAmount += newSubtotal - old.subtotal;
+          old.price = newPrice;
+          old.subtotal = newSubtotal;
         }
 
         for (const it of cleanItems) {
           const matchedProd = findProductForItem(allActiveProducts, { productSku: it.productSku, productName: it.productName });
           const prodId = matchedProd ? matchedProd.id : null;
+
+          // Produk yang sama dan belum pernah dikirim -> digabung ke baris yang sudah ada
+          const sameRow = liveItems.find(
+            (x) =>
+              x.quantityShipped === 0 &&
+              ((prodId && x.productId === prodId) || x.productSku.trim().toUpperCase() === it.productSku)
+          );
+          if (sameRow) {
+            let extraFulfilled = 0;
+            if (matchedProd) {
+              const availableNow = Math.max(0, matchedProd.physicalStock - matchedProd.reservedStock);
+              extraFulfilled = Math.min(it.quantityOrdered, availableNow);
+              if (extraFulfilled > 0) {
+                await tx.product.update({
+                  where: { id: matchedProd.id },
+                  data: { reservedStock: { increment: extraFulfilled } },
+                });
+                matchedProd.reservedStock += extraFulfilled;
+              }
+            }
+            const mergedQty = sameRow.quantityOrdered + it.quantityOrdered;
+            const mergedPrice = it.price > 0 ? it.price : sameRow.price;
+            const mergedSubtotal = Math.floor(mergedPrice * mergedQty);
+            await tx.preOrderItem.update({
+              where: { id: sameRow.id },
+              data: {
+                productId: sameRow.productId || prodId,
+                price: mergedPrice,
+                quantityOrdered: mergedQty,
+                quantityFulfilled: sameRow.quantityFulfilled + extraFulfilled,
+                subtotal: mergedSubtotal,
+              },
+            });
+            additionalAmount += mergedSubtotal - sameRow.subtotal;
+            totalPcsOrdered += it.quantityOrdered;
+            totalPcsFulfilled += extraFulfilled;
+            sameRow.quantityOrdered = mergedQty;
+            sameRow.quantityFulfilled += extraFulfilled;
+            sameRow.price = mergedPrice;
+            sameRow.subtotal = mergedSubtotal;
+            continue;
+          }
 
           // Check if available stock in warehouse can fulfill now
           let initialFulfilled = 0;

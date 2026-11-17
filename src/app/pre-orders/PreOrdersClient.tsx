@@ -937,7 +937,7 @@ export default function PreOrdersClient({
                   })()
                 ) : confirmDialog.type === 'CANCEL' ? (
                   <p>
-                    Yakin ingin membatalkan Pre-Order <strong>#{confirmDialog.po.poNumber}</strong> ({confirmDialog.po.customerName})? Jika ada stok yang sudah ditahan untuk PO ini, stok tersebut akan otomatis dilepaskan kembali ke gudang.
+                    Yakin ingin membatalkan Pre-Order <strong>#{confirmDialog.po.poNumber}</strong> ({confirmDialog.po.customerName})? Jika ada stok yang sudah ditahan untuk PO ini, stok tersebut akan otomatis dilepaskan kembali ke gudang.{confirmDialog.po.items.some((i) => i.quantityShipped > 0) && ' Karena sebagian barang sudah dikirim, bagian yang sudah dikirim tetap ditagih; hanya sisa yang belum dikirim yang dibatalkan.'}
                   </p>
                 ) : (
                   <p>
