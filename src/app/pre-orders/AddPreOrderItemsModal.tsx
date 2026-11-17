@@ -171,6 +171,39 @@ export default function AddPreOrderItemsModal({
     }
   };
 
+  // Harga tier terbaru untuk barang lama di order ini (yang belum dikirim), setelah item baru masuk
+  const computeExistingPriceUpdates = (): { itemId: string; price: number }[] => {
+    try {
+      const typesList = productTypes.length > 0 ? productTypes : getStoredProductTypes();
+      const groupKeyOf = (name: string, fallback: string) => {
+        const master = findProductMasterType(name, typesList);
+        return master ? master.name.toUpperCase() : (fallback || '').toUpperCase();
+      };
+      const groupQty = new Map<string, number>();
+      (preOrder?.items || []).forEach((ex) => {
+        const k = groupKeyOf(ex.productName, ex.productName || '');
+        groupQty.set(k, (groupQty.get(k) || 0) + (Number(ex.quantityOrdered) || 0));
+      });
+      items.forEach((it) => {
+        const k = groupKeyOf(it.productName, it.categoryName || '');
+        groupQty.set(k, (groupQty.get(k) || 0) + (Number(it.quantityOrdered) || 0));
+      });
+      const out: { itemId: string; price: number }[] = [];
+      (preOrder?.items || []).forEach((ex) => {
+        if (ex.quantityShipped > 0) return;
+        const master = findProductMasterType(ex.productName, typesList);
+        const k = groupKeyOf(ex.productName, ex.productName || '');
+        const def = master?.defaultPrice ? master.defaultPrice : (ex.productName || '').toUpperCase().includes('PARIS') ? 25000 : 42000;
+        const calc = calculateProductPrice(ex.productName || '', groupQty.get(k) || ex.quantityOrdered, def, typesList);
+        const price = calc?.price;
+        if (typeof price === 'number' && price > 0 && price !== ex.price) out.push({ itemId: ex.id, price });
+      });
+      return out;
+    } catch {
+      return [];
+    }
+  };
+
   // Parse pasted WhatsApp text
   const handleParseWhatsApp = () => {
     setError(null);
@@ -423,7 +456,7 @@ export default function AddPreOrderItemsModal({
       quantityOrdered: Number(it.quantityOrdered) || 1,
     }));
 
-    const res = await addItemsToPreOrder(preOrder.id, payload);
+    const res = await addItemsToPreOrder(preOrder.id, payload, computeExistingPriceUpdates());
 
     if (res.success) {
       setSuccessMsg(`Berhasil menambahkan ${items.length} item (${addedQty} pcs) ke Pre-Order #${preOrder.poNumber}!`);
