@@ -226,12 +226,25 @@ export function matchProduct<P extends MatchableProduct>(
   // 4. Nama lengkap "NAMA - MOTIF" sama persis dengan teks mentah
   const nameKey = textKey(rawName);
   if (nameKey) {
-    const byName = sameCat.filter((p) => textKey(`${p.name}${p.motif || ''}`) === nameKey);
+    // Hanya produk yang punya motif: nama saja ("BABY TRYSPAN") terlalu umum dan akan cocok ke produk acak
+    const byName = sameCat.filter((p) => !!textKey(p.motif) && textKey(`${p.name}${p.motif || ''}`) === nameKey);
     const nameHit = preferActive(byName);
     if (nameHit) return { product: nameHit, kind: 'name' };
   }
 
   return null;
+}
+
+/**
+ * Cari produk untuk satu item dari SELURUH daftar produk: SKU persis menang lebih dulu.
+ * (Jangan pakai find + isProductMatchItem per produk: produk pertama yang cocok longgar ikut menang.)
+ */
+export function findProductForItem<P extends MatchableProduct>(
+  products: P[],
+  item: { productSku?: string | null; productName?: string | null }
+): P | null {
+  const hit = matchProduct(products, item.productSku || '', item.productName || '');
+  return hit ? hit.product : null;
 }
 
 /** Jarak edit (Levenshtein) antar dua teks pendek. */

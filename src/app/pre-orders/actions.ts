@@ -4,6 +4,7 @@ import { paidOf, remainingOf } from '@/lib/poPayment';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { isProductMatchItem, allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
+import { findProductForItem } from '@/lib/productMatching';
 import { reconcileProductAllocation, poStatusFromQuantities } from '@/lib/opnameAllocation';
 import { buildPoItemsFromOrder } from '@/lib/orderToPo';
 import {
@@ -151,7 +152,7 @@ export async function createPreOrder(payload: CreatePreOrderPayload) {
           let matchedProdId: string | null = null;
 
           // Strictly match product by ID or exact SKU/motif
-          const prod = allActiveProducts.find((p) => isProductMatchItem(p, it));
+          const prod = findProductForItem(allActiveProducts, { productSku: it.productSku, productName: it.productName });
 
           if (prod) {
             matchedProdId = prod.id;
@@ -819,7 +820,7 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
         // 2. Upsert items & adjust stock
         for (const it of cleanItems) {
           const existingItem = it.id ? po.items.find((old) => old.id === it.id) : null;
-          const matchedProd = allActiveProducts.find((p) => isProductMatchItem(p, it));
+          const matchedProd = findProductForItem(allActiveProducts, { productSku: it.productSku, productName: it.productName });
           // Tautan dari form hanya dipercaya kalau produknya memang cocok dengan kode yang diketik
           const prodId = matchedProd ? matchedProd.id : null;
 
@@ -961,9 +962,15 @@ export interface AddPreOrderItemInput {
   quantityOrdered: number;
 }
 
+export interface ExistingItemPriceUpdate {
+  itemId: string;
+  price: number;
+}
+
 export async function addItemsToPreOrder(
   preOrderId: string,
-  newItems: AddPreOrderItemInput[]
+  newItems: AddPreOrderItemInput[],
+  priceUpdates: ExistingItemPriceUpdate[] = []
 ) {
   try {
     if (!newItems || newItems.length === 0) {
@@ -1018,11 +1025,22 @@ export async function addItemsToPreOrder(
         let totalPcsFulfilled = po.items.reduce((acc, it) => acc + it.quantityFulfilled, 0);
         let totalPcsShipped = po.items.reduce((acc, it) => acc + it.quantityShipped, 0);
 
+        // Satu invoice = satu tier harga: barang lama (yang belum dikirim) ikut dihitung ulang ke tier terbaru
+        for (const upd of priceUpdates) {
+          const old = po.items.find((x) => x.id === upd.itemId);
+          const newPrice = Math.max(0, Math.floor(Number(upd.price) || 0));
+          if (!old || old.quantityShipped > 0 || old.price === newPrice) continue;
+          const newSubtotal = newPrice * old.quantityOrdered;
+          await tx.preOrderItem.update({
+            where: { id: old.id },
+            data: { price: newPrice, subtotal: newSubtotal },
+          });
+          additionalAmount += newSubtotal - old.subtotal;
+        }
+
         for (const it of cleanItems) {
-          const matchedProd = allActiveProducts.find((p) =>
-            isProductMatchItem(p, { productSku: it.productSku, productName: it.productName })
-          );
-          const prodId = matchedProd ? matchedProd.id : it.productId || null;
+          const matchedProd = findProductForItem(allActiveProducts, { productSku: it.productSku, productName: it.productName });
+          const prodId = matchedProd ? matchedProd.id : null;
 
           // Check if available stock in warehouse can fulfill now
           let initialFulfilled = 0;
@@ -1132,9 +1150,7 @@ export async function resyncAllPreOrderStock() {
           },
         });
         for (const it of unfulfilled) {
-          const strict = activeProducts.find((p) =>
-            isProductMatchItem(p, { productSku: it.productSku, productName: it.productName })
-          );
+          const strict = findProductForItem(activeProducts, { productSku: it.productSku, productName: it.productName });
           if (strict && it.productId !== strict.id) {
             await tx.preOrderItem.update({ where: { id: it.id }, data: { productId: strict.id } });
             report.push(`Diperbaiki: ${it.productSku} dihubungkan ke produk "${strict.sku}".`);
@@ -1199,7 +1215,7 @@ export async function resyncAllPreOrderStock() {
           for (const it of po.items) {
             if (it.quantityFulfilled >= it.quantityOrdered) continue;
             const linked = it.productId ? productById.get(it.productId) : null;
-            const strict = products.find((p) => p.isActive && isProductMatchItem(p, { productSku: it.productSku, productName: it.productName }));
+            const strict = findProductForItem(products.filter((p) => p.isActive), { productSku: it.productSku, productName: it.productName });
             if (strict && strict.physicalStock - strict.reservedStock > 0 && linked && linked.id !== strict.id) {
               report.push(
                 `PERHATIAN ${po.poNumber} / ${it.productSku}: item terhubung ke produk "${linked.sku}", padahal kodenya cocok dengan "${strict.sku}" yang punya stok bebas ${strict.physicalStock - strict.reservedStock}. Hubungkan ulang.`
