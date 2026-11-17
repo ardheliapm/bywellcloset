@@ -190,7 +190,7 @@ export default function AddPreOrderItemsModal({
       });
       const out: { itemId: string; price: number }[] = [];
       (preOrder?.items || []).forEach((ex) => {
-        if (ex.quantityShipped > 0) return;
+        if (ex.quantityShipped >= ex.quantityOrdered) return;
         const master = findProductMasterType(ex.productName, typesList);
         const k = groupKeyOf(ex.productName, ex.productName || '');
         const def = master?.defaultPrice ? master.defaultPrice : (ex.productName || '').toUpperCase().includes('PARIS') ? 25000 : 42000;
