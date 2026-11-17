@@ -781,6 +781,24 @@ export async function updatePreOrderDetails(payload: UpdatePreOrderPayload) {
       return { success: false, error: 'Minimal harus ada 1 produk yang valid dalam PO.' };
     }
 
+    // Barang yang sudah dikirim tidak boleh dikurangi / dihapus (menambah boleh)
+    for (const oldIt of po.items) {
+      if (oldIt.quantityShipped <= 0) continue;
+      const kept = cleanItems.find((c) => c.id === oldIt.id);
+      if (!kept) {
+        return {
+          success: false,
+          error: `${oldIt.productName} sudah dikirim ${oldIt.quantityShipped} pcs, jadi tidak bisa dihapus dari PO.`,
+        };
+      }
+      if (kept.quantityOrdered < oldIt.quantityShipped) {
+        return {
+          success: false,
+          error: `${oldIt.productName} sudah dikirim ${oldIt.quantityShipped} pcs, jumlah tidak boleh kurang dari itu.`,
+        };
+      }
+    }
+
     await prisma.$transaction(
       async (tx) => {
         const allActiveProducts = await tx.product.findMany({

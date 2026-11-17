@@ -394,6 +394,26 @@ export async function addItemsToOrder(
 
     const mergedIncomingItems = Array.from(incomingMap.values());
 
+    // Order biasa hanya boleh berisi barang yang stoknya ada. Stok kurang -> pakai "+ Barang PO"
+    const stockIds = mergedIncomingItems.map((i) => i.productId).filter(Boolean) as string[];
+    if (stockIds.length > 0) {
+      const prods = await prisma.product.findMany({ where: { id: { in: stockIds } } });
+      const short: string[] = [];
+      for (const it of mergedIncomingItems) {
+        if (!it.productId) continue;
+        const pr = prods.find((x) => x.id === it.productId);
+        if (!pr) continue;
+        const free = Math.max(0, pr.physicalStock - pr.reservedStock);
+        if (it.quantity > free) short.push(`${pr.name} (diminta ${it.quantity}, stok bebas ${free})`);
+      }
+      if (short.length > 0) {
+        return {
+          success: false,
+          error: `Stok tidak cukup untuk order biasa: ${short.join('; ')}. Gunakan tombol "+ Barang PO" untuk barang yang menunggu stok.`,
+        };
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       // Map of existing items by productId / SKU
       const existingItemsMap = new Map<string, typeof order.items[0]>();

@@ -57,6 +57,8 @@ export default function EditPreOrderModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Harga yang diketik manual tidak ditimpa otomatis saat simpan
+  const [manualPriceKeys, setManualPriceKeys] = useState<Set<string>>(new Set());
 
   // Initialize form when modal opens with PO data
   useEffect(() => {
@@ -80,6 +82,7 @@ export default function EditPreOrderModal({
       setNewItemPrice('');
       setNewItemQty(1);
       setIsManualProduct(false);
+      setManualPriceKeys(new Set());
       setError(null);
       setSuccessMsg(null);
     }
@@ -103,8 +106,18 @@ export default function EditPreOrderModal({
   );
 
   // Item quantity handlers
+  const shippedOf = (it: { id?: string | null }) =>
+    (it.id ? preOrder.items.find((o) => o.id === it.id)?.quantityShipped : 0) || 0;
+  const keyOf = (it: { id?: string | null; productSku: string }) => it.id || it.productSku;
+
   const handleQuantityChange = (index: number, newQty: number) => {
     if (newQty < 1) return;
+    const shipped = shippedOf(items[index]);
+    if (newQty < shipped) {
+      setError(`${items[index].productName} sudah dikirim ${shipped} pcs, jumlah tidak boleh kurang dari itu (menambah boleh).`);
+      return;
+    }
+    setError(null);
     setItems((prev) => {
       const next = [...prev];
       next[index] = { ...next[index], quantityOrdered: newQty };
@@ -113,6 +126,7 @@ export default function EditPreOrderModal({
   };
 
   const handlePriceChange = (index: number, newPrice: number) => {
+    setManualPriceKeys((prev) => new Set(prev).add(keyOf(items[index])));
     setItems((prev) => {
       const next = [...prev];
       next[index] = { ...next[index], price: Math.max(0, newPrice) };
@@ -121,6 +135,11 @@ export default function EditPreOrderModal({
   };
 
   const handleRemoveItem = (index: number) => {
+    const shipped = shippedOf(items[index]);
+    if (shipped > 0) {
+      setError(`${items[index].productName} sudah dikirim ${shipped} pcs, jadi tidak bisa dihapus dari PO.`);
+      return;
+    }
     if (items.length <= 1) {
       setError('Pre-Order harus memiliki minimal 1 produk. Anda tidak dapat menghapus semua item.');
       return;
@@ -200,7 +219,7 @@ export default function EditPreOrderModal({
   };
 
   // Auto Recalculate Tier Pricing for all items based on master rules
-  const handleAutoRecalculatePrices = () => {
+  const computeTiered = (skip: (it: (typeof items)[number]) => boolean) => {
     const types = getStoredProductTypes();
     const groupCountMap = new Map<string, number>();
 
@@ -210,7 +229,8 @@ export default function EditPreOrderModal({
       groupCountMap.set(key, (groupCountMap.get(key) || 0) + it.quantityOrdered);
     });
 
-    const updated = items.map((it) => {
+    return items.map((it) => {
+      if (skip(it)) return it;
       const master = findProductMasterType(it.productName, types);
       if (master && master.isResellerEligible) {
         const totalGrpQty = groupCountMap.get(master.name) || it.quantityOrdered;
@@ -222,7 +242,10 @@ export default function EditPreOrderModal({
       }
       return it;
     });
+  };
 
+  const handleAutoRecalculatePrices = () => {
+    const updated = computeTiered((it) => shippedOf(it) > 0);
     setItems(updated);
     setSuccessMsg('Harga satuan seluruh produk berhasil dihitung ulang otomatis sesuai ketentuan tier!');
     setTimeout(() => setSuccessMsg(null), 3000);
@@ -245,12 +268,20 @@ export default function EditPreOrderModal({
 
     setLoading(true);
 
+    // Harga otomatis mengikuti tier reseller sesuai total qty (kecuali yang sudah dikirim / harga diketik manual)
+    let finalItems = items;
+    try {
+      finalItems = computeTiered((it) => shippedOf(it) > 0 || manualPriceKeys.has(keyOf(it)));
+    } catch {
+      finalItems = items;
+    }
+
     const res = await updatePreOrderDetails({
       poId: preOrder.id,
       customerName: customerName.trim(),
       customerPhone: customerPhone.trim() || null,
       notes: notes.trim() || null,
-      items,
+      items: finalItems,
     });
 
     setLoading(false);
@@ -413,7 +444,7 @@ export default function EditPreOrderModal({
                               <button
                                 type="button"
                                 onClick={() => handleQuantityChange(idx, it.quantityOrdered - 1)}
-                                disabled={it.quantityOrdered <= 1}
+                                disabled={it.quantityOrdered <= Math.max(1, shippedOf(it))}
                                 className="w-7 h-7 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 transition-colors"
                               >
                                 <Minus className="w-3 h-3" />
@@ -463,8 +494,7 @@ export default function EditPreOrderModal({
                             <button
                               type="button"
                               onClick={() => handleRemoveItem(idx)}
-                              disabled={items.length <= 1}
-                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-20 cursor-pointer"
+                              className={`p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer ${items.length <= 1 || shippedOf(it) > 0 ? 'opacity-30' : ''}`}
                               title="Hapus produk ini dari Pre-Order"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
