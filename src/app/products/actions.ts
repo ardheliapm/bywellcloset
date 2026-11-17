@@ -1,5 +1,6 @@
 'use server';
 
+import { buildNewProductDraft } from '@/lib/productMatching';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { allocateStockToWaitingPreOrders } from '@/lib/preOrderFulfillment';
@@ -46,6 +47,48 @@ export async function getProducts(): Promise<ProductItem[]> {
   } catch (error) {
     console.error('Error fetching products:', error);
     return [];
+  }
+}
+
+/**
+ * Buat produk baru dari kode/nama yang diketik di PO (stok 0). Harga dan kategori mengikuti
+ * kebiasaan Master (buildNewProductDraft). Kalau SKU itu sudah ada, produk yang ada dikembalikan.
+ */
+export async function createProductFromDraft(rawSku: string, rawName: string) {
+  try {
+    const draft = buildNewProductDraft(rawSku, rawName);
+    if (!draft) return { success: false as const, error: 'Kode produk tidak terbaca' };
+    const sku = draft.sku.trim().toUpperCase();
+
+    let product = await prisma.product.findUnique({ where: { sku } });
+    if (!product) {
+      product = await prisma.product.create({
+        data: {
+          sku,
+          name: draft.name,
+          motif: draft.motif,
+          color: null,
+          costPrice: draft.costPrice,
+          sellingPrice: draft.sellingPrice,
+          wholesalePrice: draft.wholesalePrice,
+          physicalStock: 0,
+          reservedStock: 0,
+          isActive: true,
+        },
+      });
+      revalidatePath('/products');
+    }
+    return {
+      success: true as const,
+      product: {
+        ...product,
+        wholesalePrice: product.wholesalePrice || product.sellingPrice,
+        availableStock: product.physicalStock - product.reservedStock,
+      } as ProductItem,
+    };
+  } catch (error: any) {
+    console.error('Error creating product from draft:', error);
+    return { success: false as const, error: error.message || 'Gagal membuat produk' };
   }
 }
 

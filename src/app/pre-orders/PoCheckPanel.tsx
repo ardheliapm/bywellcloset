@@ -3,15 +3,20 @@
 import React from 'react';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import type { PreviewLine, PreviewProduct } from '@/lib/poPreview';
+import { buildNewProductDraft } from '@/lib/productMatching';
 
 interface Props<P extends PreviewProduct> {
   lines: PreviewLine<P>[];
   /** Dipanggil saat pengguna memilih saran produk untuk baris yang tidak dikenali */
   onPick: (itemId: string, product: P) => void;
+  /** Dipanggil saat pengguna memilih membuat produk baru untuk baris yang tidak dikenali */
+  onCreate?: (itemId: string) => void;
+  /** Id baris yang sedang dibuatkan produknya */
+  creatingId?: string | null;
 }
 
 /** Pratinjau sebelum PO disimpan: produk Master yang dituju, stok bebas, dan berapa pcs yang langsung siap. */
-export default function PoCheckPanel<P extends PreviewProduct>({ lines, onPick }: Props<P>) {
+export default function PoCheckPanel<P extends PreviewProduct>({ lines, onPick, onCreate, creatingId }: Props<P>) {
   if (lines.length === 0) return null;
   const unknown = lines.filter((l) => !l.product).length;
 
@@ -66,8 +71,22 @@ export default function PoCheckPanel<P extends PreviewProduct>({ lines, onPick }
                   ))}
                 </div>
               ) : (
-                <div className="text-[11px] text-slate-500">Tidak ada saran. Periksa ejaannya, atau tetap simpan lalu tautkan nanti.</div>
+                <div className="text-[11px] text-slate-500">Tidak ada saran. Periksa ejaannya, atau buat produk baru di bawah.</div>
               )}
+              {onCreate && (() => {
+                const draft = buildNewProductDraft(l.rawSku, l.rawName);
+                if (!draft) return null;
+                return (
+                  <button
+                    type="button"
+                    disabled={creatingId === l.itemId}
+                    onClick={() => onCreate(l.itemId)}
+                    className="px-2.5 py-1 rounded-lg border border-indigo-300 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-[11px] font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {creatingId === l.itemId ? 'Membuat...' : `+ Buat produk baru "${draft.sku}" (${draft.name})`}
+                  </button>
+                );
+              })()}
             </div>
           ),
         )}
